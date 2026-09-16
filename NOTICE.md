@@ -34,13 +34,14 @@ without carrying a permanent divergence.
 
 ## What this fork changes
 
-**75 files, +5,929 / −385** — eleven new files, 64 modified. The full list, by feature rather than by
-file, is in [`CHANGES.md`](CHANGES.md). In short, it adds: a Chinese interface whose typeface is
-read off the card rather than baked into the binary; a pinyin letter ring over the shelf; cart
-faces built off the frame loop with a bounded texture pool; selectable panel-mask presets and a
-colour-correction stage, four new `SELECT` chords and all; a twenty-step backlight; audio latency
-profiles; per-cart cheat codes with an on-device browser; button remapping; and GB/GBC cartridge
-artwork (assets only, not wired up).
+**82 files, +6,746 / −458** against the baseline. The change set proper is 75 of them — eleven new
+files, 64 modified; the other seven are this fork's notice and repository housekeeping. The full
+list, by feature rather than by file, is in [`CHANGES.md`](CHANGES.md). In short, it adds: a Chinese
+interface whose typeface is read off the card rather than baked into the binary; a pinyin letter
+ring over the shelf; cart faces built off the frame loop with a bounded texture pool; selectable
+panel-mask presets and a colour-correction stage, four new `SELECT` chords and all; a twenty-step
+backlight; audio latency profiles; per-cart cheat codes with an on-device browser; button
+remapping; and GB/GBC cartridge artwork (assets only, not wired up).
 
 ## Licensing of what is not ours
 

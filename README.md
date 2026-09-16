@@ -22,8 +22,9 @@ the fork: what it adds, what it changes, and what the buttons actually do here.
 
 A modified build of `slot`, aimed at a Chinese GBA library living on one SD card.
 
-**75 files changed, +5,929 / −385** against upstream `4345cb8b` — 11 added, 64 modified. The full
-account, feature by feature and file by file with the reasoning, is in [`CHANGES.md`](CHANGES.md).
+**82 files changed, +6,746 / −458** against upstream `4345cb8b` — 75 of them the change set proper
+(11 new files, 64 modified) and 7 the fork's notice and repository housekeeping. The full account,
+feature by feature and file by file with the reasoning, is in [`CHANGES.md`](CHANGES.md).
 
 The short of it: the interface is Chinese and takes its typeface off the card; the shelf grew a
 letter ring, because a library of hanzi has no alphabetical order of its own; a cart can carry its
