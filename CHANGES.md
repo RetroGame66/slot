@@ -256,6 +256,49 @@ the repository, so it is not part of the diff counted above.
 
 ---
 
+## 14. The letter ring, stood on its end
+
+The ring shipped laid across the panel above the cart row, with `Up` / `Down` turning it. Hands
+disagree about that: a dial across the panel asks for the shoulders, and `L` / `R` are bound to
+nothing on the shelf — there is no core under it to want them. Rather than pick, the ring reads
+two ways and `SELECT` + `START` swaps which one is standing.
+
+Both views are **one** `Letters`. The rail is not a second index with a second position to keep in
+step; it is the same drum, the same marker and the same counts drawn a quarter turn round, so the
+two views cannot disagree about where the library is. All four keys step whichever one is up, so
+swapping never leaves a key that does nothing.
+
+| File | Change |
+|---|---|
+| `slot-ui/src/letters.rs` | `draw_rail()` — the drum down the right-hand edge (`rail_cx()` / `rail_cy()`). The capsule and the ridges are the dial's own textures drawn with `Draw::Turned` at `FRAC_PI_2` rather than rasterised again, so they cannot drift from the wheel's; a letter gives up *height* as its pane turns away and keeps its width, which is the vertical drum's rule through ninety degrees. |
+| `slot/src/app.rs` | `LetterNav` (`Wheel` by default, `Sidebar`), `toggle_letter_nav()` on `SELECT` + `START`, and `L1` / `R1` stepping the marker beside `Up` / `Down`. Declined while the core picker is up, the way the other chords are. |
+| `slot/src/root.rs` | `letter_nav()` / `write_letter_nav()` — `System/letternav.txt`, `wheel` or `sidebar`, in the same shape as `display.txt` and `audio.txt`. |
+| `slot-input/src/gesture.rs` | `Action::LetterNavToggle`; `Btn::Start` at bit 2048 of the chord table. `SELECT` + `START` and not `SELECT` + `B`: `START` is bound to nothing but the core picker here, while `B` is every game's most-mashed key and the way out of every screen. |
+| `slot-ui/src/toast.rs` | `Toast::NavWheel` / `NavSidebar`. The swap moves no cart and no letter, so the line is the whole of the answer — there is nothing else on screen that changed. |
+
+## 15. A shortcut card under the about screen
+
+The chords are the useful half of this fork and the half nobody could remember: five of them, on a
+machine whose every button was already spoken for, discoverable only by being told. The about
+screen is where a user goes to find out what a thing is, so the list went under it — `MENU` opens
+the label and the card hangs below, in two sections (the carousel, and in game), paged with
+`Up` / `Down` and closed with `B` or `MENU`.
+
+The card scrolls rather than paging hard, easing to where the last press asked it to go the way the
+letter dial does, and it is bounded by its own content: `about_scroll_max()` is the sum of the rows,
+not a number written down, so adding a key to the list gives it somewhere to go without touching
+the arithmetic. A line pinned at the foot says what the arrows do, which is the one thing on the
+card that can be read without scrolling.
+
+| File | Change |
+|---|---|
+| `slot-ui/src/shortcuts.rs` | **New.** The rows themselves: `Row::Head` / `Row::Key`, `SHORTCUT_ROWS` (22 of them, the shelf's eleven and the game's nine, each head included), `SHORTCUT_HINT`, and the faces. Two columns — the key's name ends at `KEY_COL`, the description starts a gap past it — haloed, because the card is drawn over a photograph. Four tests, one of which asserts the longest key still fits its column. |
+| `slot/src/app.rs` | `Phase::About { scroll, want }` (it used to be a bare `About`), `ABOUT_PAD` / `ABOUT_GAP` / `ABOUT_PAGE` / `ABOUT_EASE`, `about_first_y()`, `about_scroll_max()`, `set_shortcut_faces()`, and the draw loop that skips the rows off the panel. |
+| `slot/src/frontend.rs` | The 22 rows and the hint line are built at boot with the rest of the fixed furniture — opening the one screen whose job is to be read is the worst moment to be asking a font for twenty lines. |
+| `slot-ui/src/sticker.rs` | `draw_sticker_at()` — the label at a stated height rather than centred, because it is no longer the whole screen; `draw_sticker()` is that with the centred height. |
+
+---
+
 ## Notes for a reader of the diff
 
 - **Comments are English throughout.** Chinese text still appears where it is *data* rather than

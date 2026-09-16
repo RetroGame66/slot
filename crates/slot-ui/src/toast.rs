@@ -19,10 +19,15 @@ pub enum Toast {
     AudioStable,
     AudioBalanced,
     AudioStrict,
+    /// The two ways the shelf indexes the library, said when SELECT+START swaps between them.
+    /// The swap is otherwise invisible until the row moves: for that one press the dial does
+    /// not say anything new, it says the same thing in another place.
+    NavWheel,
+    NavSidebar,
 }
 
 impl Toast {
-    pub const ALL: [Toast; 7] = [
+    pub const ALL: [Toast; 9] = [
         Toast::StateSaved,
         Toast::StateLoaded,
         Toast::CheatsOn,
@@ -30,6 +35,8 @@ impl Toast {
         Toast::AudioStable,
         Toast::AudioBalanced,
         Toast::AudioStrict,
+        Toast::NavWheel,
+        Toast::NavSidebar,
     ];
 
     /// Position in `ALL`, which is the order faces are uploaded in.
@@ -46,6 +53,8 @@ impl Toast {
             Toast::AudioStable => "音频：稳定",
             Toast::AudioBalanced => "音频：均衡",
             Toast::AudioStrict => "音频：严格",
+            Toast::NavWheel => "字母导航：轮盘",
+            Toast::NavSidebar => "字母导航：侧栏",
         }
     }
 }

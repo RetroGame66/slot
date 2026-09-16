@@ -62,6 +62,20 @@ digit, punctuation, or a character the table does not know. Empty facets are dra
 over rather than closed up, because a ring that hid its gaps would make "B next to C" mean one
 cart apart on one card and two hundred apart on the next.
 
+**The same ring, stood on its end.** The ring reads two ways — a **wheel** laid across the panel,
+or a **sidebar** stood down its right-hand edge — and `SELECT` + `START` swaps which one is up. It
+is one dial either way, drawn twice, so the two views cannot disagree about where the library is:
+the facets still bunch towards the ends and one letter still plainly owns the middle. `L` / `R` step
+it as well as `Up` / `Down`, which is the pair a dial lying across the panel asks for and the pair
+users asked for by name. Which one reads better is a matter of hands, so the choice lives on the
+card in `System/letternav.txt` (`wheel` or `sidebar`) rather than in the build.
+
+**A shortcut card under the about screen.** `MENU` on the carousel opens the label, and hanging
+under it is every key the machine answers: one section for the carousel, one for in game, the five
+`SELECT` chords included. `Up` / `Down` page it, `B` or `MENU` closes, and a line pinned at the foot
+says so. The rows are fixed strings rasterised at boot with the rest of the furniture — opening
+the one screen whose job is to be read is the worst moment to be asking a font for twenty lines.
+
 **Panel-mask presets.** Upstream multiplies the picture by one fixed LCD3x table, always. Here the
 mask is five presets on `SELECT` + `X` — OFF, LCD3X 50%, LCD3X 100% (the default), SCANLINE 50%,
 SCANLINE 100% — and the card may ship its own 3x3 table in `System/mask.txt` instead of the
@@ -125,7 +139,7 @@ here because the fiddly parts of maintaining a card should be a button. Describe
 [The companion toolbox](#the-companion-toolbox).
 
 **Settings that travel with the card** rather than with the binary. `System/` now carries `fonts/`,
-`labels.txt`, `display.txt`, `mask.txt`, `cc.txt`, `audio.txt`, `remap.txt` and `Cheats/`. Every one
+`labels.txt`, `display.txt`, `mask.txt`, `cc.txt`, `audio.txt`, `remap.txt`, `letternav.txt` and `Cheats/`. Every one
 of them is optional: a missing, blank or misspelled file is the shipped default, not an error,
 because a device with no console is not the place to surface a typo in a config file.
 
@@ -188,11 +202,23 @@ A `+` means both together. `†` marks a chord this fork adds; everything else i
 |-----------------|-------------------------------------|
 | `Left` / `Right`| Browse the cart row                 |
 | `Up` / `Down` † | Step the letter ring; the shelf follows |
+| `L` / `R` †     | The same step, from the shoulders   |
 | Tap `A`         | Resume the last save state          |
 | Hold `A`        | Start the game fresh                |
-| `MENU`          | Open the about screen               |
+| `MENU`          | About screen, and the shortcut card under it |
 | `START`         | Choose which emulator runs the cart |
+| `SELECT` + `START` † | Stand up the other letter dial |
 | `SELECT` + `VOL+` / `VOL-` † | Step the audio profile  |
+
+### On the about card (`MENU`)
+
+| Input           | Action                              |
+|-----------------|-------------------------------------|
+| `Up` / `Down`   | Page the shortcut list              |
+| `B` or `MENU`   | Close, back to the carousel         |
+
+The card is two sections — the carousel and in game — and it carries the `SELECT` chords as well,
+which is the part that was being forgotten.
 
 ### In game
 
@@ -218,7 +244,7 @@ A `+` means both together. `†` marks a chord this fork adds; everything else i
 | `Y`                      | Delete the one in hand                           |
 | `B` or `MENU`            | Close, back to the game                          |
 
-### The four chords this fork adds, in full
+### The five chords this fork adds, in full
 
 **`SELECT` + `X` — panel mask.** Five stops, in a ring: `OFF` → `LCD3X 50%` → `LCD3X 100%` →
 `SCANLINE 50%` → `SCANLINE 100%`. The default is `LCD3X 100%`, which is upstream's look. The
@@ -242,6 +268,12 @@ profile reopens the PCM, which is free on the shelf and a gap in the sound anywh
 steps forward, `VOL-` back, and a toast (`音频：稳定` / `音频：均衡` / `音频：严格`) is the only
 confirmation it gets — the setting moves no pixel, so without the line nothing on screen would say
 it moved.
+
+**`SELECT` + `START` — which letter dial is standing.** On the carousel. The ring reads two ways:
+laid across the panel above the cart row (**wheel**, the default) or stood on its end down the
+right-hand edge (**sidebar**). They are two views of one dial — same marker, same position, same
+counts — so swapping moves nothing and loses nothing, and `Up` / `Down` and `L` / `R` step whichever
+one is up. The choice is written to `System/letternav.txt` as `wheel` or `sidebar`.
 
 ### How the `SELECT` chords behave
 

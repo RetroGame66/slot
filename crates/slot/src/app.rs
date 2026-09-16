@@ -9,11 +9,12 @@ use slot_store::{
     StateEntry, StateRing, Theme, BLUE_LIGHT_MAX, BRIGHTNESS_MAX, RING_MAX, VOLUME_MAX,
 };
 use slot_ui::{
-    board_at, board_zoom, draw_backdrop, draw_empty_slot, draw_footer, draw_sticker, ease, grown,
-    letters, lid_at, lift_of, on_board, ClockPicker, Draw, FfState, Hud, HudKind, Icon, Letters,
-    Millis, Placed, Polaroids, PowerChoice, Refusal, Shelf, SlotChrome, TexId, Toast, BOARD_W,
-    BOARD_X, CART_H, CART_W, CHIP_H, CHIP_U, CHIP_V, CHIP_W, HINT_EDGE, HINT_H, HOP_LIFT, MOUTH_H,
-    SHADOW_H, SHADOW_W, SHELF_TITLE_H, SOCKET_H, SOCKET_U, SOCKET_V, SOCKET_W, TURN_PAD,
+    board_at, board_zoom, draw_backdrop, draw_empty_slot, draw_footer, draw_shortcut_row,
+    draw_sticker_at, ease, grown, letters, lid_at, lift_of, on_board, ClockPicker, Draw, FfState,
+    Hud, HudKind, Icon, Letters, Millis, Placed, Polaroids, PowerChoice, Refusal, Shelf,
+    SlotChrome, TexId, Toast, BOARD_W, BOARD_X, CART_H, CART_W, CHIP_H, CHIP_U, CHIP_V, CHIP_W,
+    HINT_EDGE, HINT_H, HOP_LIFT, MOUTH_H, SHADOW_H, SHADOW_W, SHELF_TITLE_H, SOCKET_H, SOCKET_U,
+    SOCKET_V, SOCKET_W, STICKER_H, TURN_PAD,
 };
 
 use crate::audio::{Profile, Sfx};
@@ -286,9 +287,14 @@ pub enum Phase {
     Polaroids {
         cart: String,
     },
-    /// The label. A screen of its own rather than a panel, because it is one object being
-    /// looked at and there is nothing else on it.
-    About,
+    /// The label, and the shortcut card hanging under it. A screen of its own rather than a
+    /// panel, because it is one object being looked at and there is nothing else on it — but
+    /// the object grew a list, so it carries how far down it has been scrolled and how far down
+    /// the last press asked it to go.
+    About {
+        scroll: f32,
+        want: f32,
+    },
     Doze {
         cart: Option<String>,
     },
@@ -335,6 +341,27 @@ fn tally_letters(carts: &[Cart]) -> [usize; letters::N] {
     }
     counts
 }
+
+/// Where the about card starts on the panel, and the gap between the label and the rows under
+/// it. The label used to be centred because it was the whole screen; now that the card runs
+/// past the bottom of the panel, it belongs at the top of what there is.
+const ABOUT_PAD: f32 = 26.0;
+const ABOUT_GAP: f32 = 20.0;
+
+/// The first row's resting place: below the label and one gap past it. Derived from the two
+/// numbers above rather than written down, so moving the label carries the rows with it.
+fn about_first_y() -> f32 {
+    ABOUT_PAD + STICKER_H as f32 + ABOUT_GAP
+}
+
+/// How far one press takes the card. Six rows: less than that is a card the user has to walk to
+/// the end of, and a whole screen is a card that jumps past the line it was being read at.
+const ABOUT_PAGE: f32 = 180.0;
+
+/// How fast the card closes on where the last press asked it to go, as a share of the way there
+/// per second. Slower than the letter dial's spring on purpose: this is text being moved, and
+/// there is nothing here that has to land on anything.
+const ABOUT_EASE: f32 = 9.0;
 
 /// The on-screen picture's two independent knobs.
 ///
@@ -501,6 +528,54 @@ pub(crate) struct CheatItem {
     pub(crate) enabled: bool,
 }
 
+/// Which of the two dials the shelf indexes its letters with.
+///
+/// One `Letters` behind both of them — one position, one spring, one set of counts — read two
+/// ways: a drum laid across the strip above the row, or that same drum stood on its end down
+/// the right-hand edge of the panel. Which one reads better is a matter of hands: some arrive
+/// expecting the shoulders to turn it, some the arrows, and neither is wrong about the object
+/// they are looking at. Rather than choose, both are answered, and swapping which one is
+/// standing is one chord away. Whichever it is, it says the same thing — the letter the cart
+/// under the caret belongs to — because there is only ever one marker.
+///
+/// Persisted to `System/letternav.txt`, the way the display modes and the audio profile are:
+/// a card is one machine, and a preference that came back different after a boot was never set.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+pub enum LetterNav {
+    /// Across the panel, above the row. What shipped.
+    #[default]
+    Wheel,
+    /// Down the right-hand edge, its letters running the way the side indexes do.
+    Sidebar,
+}
+
+impl LetterNav {
+    /// The one that is not standing.
+    fn other(self) -> Self {
+        match self {
+            LetterNav::Wheel => LetterNav::Sidebar,
+            LetterNav::Sidebar => LetterNav::Wheel,
+        }
+    }
+
+    /// How it is spelled on the card. Anything else in the file is read as the default.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LetterNav::Wheel => "wheel",
+            LetterNav::Sidebar => "sidebar",
+        }
+    }
+
+    /// Back from how it is spelled on the card, and `None` for anything not spelled either way.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "wheel" => Some(LetterNav::Wheel),
+            "sidebar" => Some(LetterNav::Sidebar),
+            _ => None,
+        }
+    }
+}
+
 pub struct App {
     phase: Phase,
     shelf: Shelf,
@@ -516,6 +591,9 @@ pub struct App {
     letter_faces: Vec<(TexId, u32, u32)>,
     letter_capsule_face: Option<(TexId, u32, u32)>,
     letter_ridge_face: Option<TexId>,
+    /// Which of the two dials is standing. Both read the same `Letters`, so it decides how the
+    /// ring is drawn and nothing about what it says.
+    letter_nav: LetterNav,
     /// When A went down on the shelf, and `None` the rest of the time. The hold lives here
     /// rather than in the gesture layer because A is the GBA's A button everywhere else, and
     /// `Gestures` is deliberately blind to which screen is up.
@@ -637,6 +715,12 @@ pub struct App {
     clock_faces: Option<(TexId, TexId)>,
     /// The label, rasterised whole. Re-uploaded when the gauge moves.
     sticker_face: Option<TexId>,
+    /// The shortcut card's rows, in the order they are written and each with the height it was
+    /// rasterised at. Uploaded at boot with the rest of the fixed furniture. The heights are as
+    /// much the point as the textures: the card is exactly as tall as its rows make it.
+    shortcut_rows: Vec<(TexId, u32, u32)>,
+    /// The one line of the card that does not move.
+    shortcut_hint: Option<(TexId, u32, u32)>,
     /// One picture from `Wallpapers`, behind everything the shelf draws. `None` on a card
     /// that carries none, which is the common case.
     wallpaper: Option<TexId>,
@@ -719,6 +803,7 @@ impl App {
             letter_faces: Vec::new(),
             letter_capsule_face: None,
             letter_ridge_face: None,
+            letter_nav: LetterNav::default(),
             play_held: None,
             refusal: None,
             refused_from: None,
@@ -758,6 +843,8 @@ impl App {
             undo_face: None,
             clock_faces: None,
             sticker_face: None,
+            shortcut_rows: Vec::new(),
+            shortcut_hint: None,
             wallpaper: None,
             battery_percent: slot_ui::Printed::default(),
             bolt: None,
@@ -816,6 +903,7 @@ impl App {
         let modes = crate::root::display_modes(root);
         app.display = DisplayFilter::new(lcd3x, nocolor_cc, modes);
         app.audio = crate::root::audio_profile(root);
+        app.letter_nav = crate::root::letter_nav(root);
         app.state = read_slot_state(root);
         if app.state.clock_set {
             app.start();
@@ -893,6 +981,22 @@ impl App {
         if let Some(root) = &self.root {
             crate::root::write_display_modes(root, self.display.mask_mode, self.display.cc_mode);
         }
+    }
+
+    /// SELECT+START on the shelf: stand up the other dial and persist the choice to
+    /// `System/letternav.txt`.
+    fn toggle_letter_nav(&mut self) {
+        self.letter_nav = self.letter_nav.other();
+        if let Some(root) = &self.root {
+            crate::root::write_letter_nav(root, self.letter_nav);
+        }
+        // The library does not move — no cart changes place and no letter gains a game — so the
+        // press is answered only by the thing it changed, and that is the line.
+        let said = match self.letter_nav {
+            LetterNav::Wheel => Toast::NavWheel,
+            LetterNav::Sidebar => Toast::NavSidebar,
+        };
+        self.hud.toast(said, self.now());
     }
 
     /// Into the slot or onto the shelf. Reached on boot once the clock is known, and from
@@ -979,6 +1083,26 @@ impl App {
 
     pub fn set_sticker_face(&mut self, face: TexId) {
         self.sticker_face = Some(face);
+    }
+
+    /// The shortcut card: one face per row and the line that stays at its foot. Fixed strings,
+    /// so they are built once at boot and never asked for again.
+    pub fn set_shortcut_faces(
+        &mut self,
+        rows: Vec<(TexId, u32, u32)>,
+        hint: Option<(TexId, u32, u32)>,
+    ) {
+        self.shortcut_rows = rows;
+        self.shortcut_hint = hint;
+    }
+
+    /// How far the about card can be scrolled: how much taller than the panel its label and its
+    /// rows make it. Zero while the rows are not up yet, which is a card that does not move
+    /// rather than one that scrolls into nothing.
+    fn about_scroll_max(&self) -> f32 {
+        let rows: f32 = self.shortcut_rows.iter().map(|(_, _, h)| *h as f32).sum();
+        let end = about_first_y() + rows + ABOUT_PAD;
+        (end - OUT_H as f32).max(0.0)
     }
 
     pub fn set_clock_faces(&mut self, line: TexId, hint: TexId) {
@@ -1404,6 +1528,9 @@ impl App {
             return self.game_menu_input(action);
         }
         let now = self.now();
+        // Ahead of the match that borrows the phase: the card's limit is a fact about how many
+        // rows are on it, not about the press that is being answered.
+        let about_max = self.about_scroll_max();
         match self.phase {
             Phase::Shelf => match action {
                 // START rather than SELECT, and the difference is not cosmetic. SELECT is
@@ -1425,6 +1552,11 @@ impl App {
                 // else. See `Action::AudioProfileNext`.
                 Action::AudioProfileNext if self.core_picker.is_none() => self.cycle_audio(true),
                 Action::AudioProfilePrev if self.core_picker.is_none() => self.cycle_audio(false),
+                // SELECT+START swaps which dial is standing. START alone is already this screen's
+                // core picker, which is the only reason it pairs with something: with SELECT held
+                // the shoulders are save and load, the arrows are the levels, and those are the
+                // four combinations anyone reaching for a second key has already tried.
+                Action::LetterNavToggle if self.core_picker.is_none() => self.toggle_letter_nav(),
                 // Ahead of the shelf's own movement, so an open picker takes the arrows
                 // before the row of carts underneath it does.
                 _ if self.core_picker.is_some() => self.core_picker_input(action),
@@ -1439,7 +1571,21 @@ impl App {
                 Action::GbaDown(Btn::Down) => self.step_letters(1, now),
                 Action::GbaUp(Btn::Up) => self.letters.release(-1),
                 Action::GbaUp(Btn::Down) => self.letters.release(1),
-                Action::OpenAbout => self.phase = Phase::About,
+                // L and R step it as well, which is the pair a dial lying across the panel asks
+                // for: they are either end of it. Neither is claimed here otherwise — on their
+                // own they are the GBA's own L and R and there is no core under this screen to
+                // want them — and answering all four keys is what keeps the other view from
+                // having a key that does nothing, whichever one the user is looking at.
+                Action::GbaDown(Btn::L1) => self.step_letters(-1, now),
+                Action::GbaDown(Btn::R1) => self.step_letters(1, now),
+                Action::GbaUp(Btn::L1) => self.letters.release(-1),
+                Action::GbaUp(Btn::R1) => self.letters.release(1),
+                Action::OpenAbout => {
+                    self.phase = Phase::About {
+                        scroll: 0.0,
+                        want: 0.0,
+                    }
+                }
                 // A is two actions and the press cannot tell them apart yet, so the cart
                 // goes in on the release. The hold has already taken it if it got there
                 // first, and then the release is not a second press.
@@ -1485,10 +1631,26 @@ impl App {
                 _ => {}
             },
             // MENU closes it as well as opening it, so the button that got you here gets you
-            // back without having to know that B also works.
-            Phase::About if action == Action::GbaDown(Btn::B) || action == Action::OpenAbout => {
-                self.phase = Phase::Shelf
-            }
+            // back without having to know that B also works. The arrows belong to the card
+            // while it is up: it is the only screen with more on it than fits, so it is the one
+            // screen where up and down have somewhere to go.
+            Phase::About { scroll, want } => match action {
+                // Page, do not nudge: the card is a list you travel, not a cursor you
+                // steer. Setting the phase rather than poking a field keeps the eased
+                // scroll and the wanted scroll in the same place as the rest of the state.
+                Action::GbaDown(Btn::Up) => {
+                    let w = (want - ABOUT_PAGE).max(0.0);
+                    self.phase = Phase::About { scroll, want: w };
+                }
+                Action::GbaDown(Btn::Down) => {
+                    let w = (want + ABOUT_PAGE).min(about_max);
+                    self.phase = Phase::About { scroll, want: w };
+                }
+                _ if action == Action::GbaDown(Btn::B) || action == Action::OpenAbout => {
+                    self.phase = Phase::Shelf
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -1708,6 +1870,18 @@ impl App {
                     touched = was < 0.0 && *t >= 0.0;
                 }
                 (*t >= EJECT_S).then_some(Phase::Shelf)
+            }
+            // The card closes on where the last press asked it to go rather than arriving there
+            // between two frames: a page of text that changed while the eye was mid-line is a
+            // page that has to be found again. `want` is the press and `scroll` is the picture,
+            // which is the same split the letter dial keeps.
+            Phase::About { scroll, want } => {
+                if (*want - *scroll).abs() < 0.5 {
+                    *scroll = *want;
+                } else {
+                    *scroll += (*want - *scroll) * (ABOUT_EASE * dt).min(1.0);
+                }
+                None
             }
             _ => None,
         };
@@ -1993,17 +2167,27 @@ impl App {
                     }
                     _ => {
                         self.shelf.draw(self.shelf_shake(), out);
-                        // The dial goes over the row, in the strip the row leaves above itself.
-                        // Not drawn while the picker has the lid off: the strip is a readout of
-                        // where the caret is in the library, and with a cart open there is no
-                        // library on screen for it to be somewhere in.
-                        self.letters.draw(
-                            self.letter_capsule_face,
-                            &self.letter_faces,
-                            &self.letter_counts,
-                            self.letter_ridge_face,
-                            out,
-                        );
+                        // Whichever dial is standing goes over the row: in the strip the row
+                        // leaves above itself when it lies across the panel, down the right-hand
+                        // edge when it stands on its end. Not drawn while the picker has the lid
+                        // off: a dial is a readout of where the caret is in the library, and with
+                        // a cart open there is no library on screen for it to be somewhere in.
+                        match self.letter_nav {
+                            LetterNav::Wheel => self.letters.draw(
+                                self.letter_capsule_face,
+                                &self.letter_faces,
+                                &self.letter_counts,
+                                self.letter_ridge_face,
+                                out,
+                            ),
+                            LetterNav::Sidebar => self.letters.draw_rail(
+                                self.letter_capsule_face,
+                                &self.letter_faces,
+                                &self.letter_counts,
+                                self.letter_ridge_face,
+                                out,
+                            ),
+                        }
                     }
                 }
                 // After the row and before the case: it names what the row is showing, so it
@@ -2026,12 +2210,28 @@ impl App {
                     out,
                 );
             }
-            Phase::About => {
+            Phase::About { scroll, .. } => {
                 // The same ground the shelf stands on, scrim and all. The label is a dark
                 // object and the scrim is what a dark object needs to read over a
                 // photograph — it is there for the carts for exactly the same reason.
                 draw_backdrop(self.wallpaper, out);
-                draw_sticker(self.sticker_face, out);
+                // One card, one scroll: the label goes up with the rows under it rather than
+                // staying in the middle of the panel while the list moves behind it.
+                draw_sticker_at(self.sticker_face, ABOUT_PAD - *scroll, out);
+                let mut y = about_first_y() - *scroll;
+                for face in self.shortcut_rows.iter().copied() {
+                    // Off the panel is off the panel: twenty rows of which five are ever on
+                    // screen is not a reason to hand the compositor twenty.
+                    if y < OUT_H as f32 && y + face.2 as f32 > 0.0 {
+                        draw_shortcut_row(Some(face), y, out);
+                    }
+                    y += face.2 as f32;
+                }
+                // Pinned. It is the line that says the rest of the card moves, so it cannot be
+                // the thing that moves.
+                if let Some((_, _, h)) = self.shortcut_hint {
+                    draw_shortcut_row(self.shortcut_hint, OUT_H as f32 - h as f32 - ABOUT_PAD, out);
+                }
                 return;
             }
             // The shelf recedes behind the cart on the way in; on the way out the live

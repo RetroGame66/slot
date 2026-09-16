@@ -98,6 +98,31 @@ const CAPSULE_Y: f32 =
     (crate::shelf::FOOT_Y - crate::cart::CART_H as f32 * crate::shelf::CENTER_SCALE) / 2.0
         - CAPSULE_H / 2.0;
 
+// ---------------------------------------------------------------------------------------
+// The rail: the same housing, stood on its end down the right-hand edge
+// ---------------------------------------------------------------------------------------
+
+/// A quarter turn clockwise. Both the housing and the ridges are drawn rotated rather than
+/// rasterised again: one texture per object, whatever way round it is being looked at.
+const QUARTER_TURN: f32 = std::f32::consts::FRAC_PI_2;
+
+/// What the rail clears either side of itself: ten pixels off the right edge, which is what the
+/// housing's own shadow needs to stay inside the panel rather than be clipped by it.
+const RAIL_MARGIN: f32 = 10.0;
+
+/// Where the rail runs, horizontally. Standing the housing up puts `CAPSULE_H` — its height,
+/// which is a facet's whole opening — across the panel, so that is the width it asks for.
+fn rail_cx() -> f32 {
+    crate::draw::OUT_W as f32 - RAIL_MARGIN - CAPSULE_H / 2.0
+}
+
+/// Where its marker sits, vertically: halfway up the cart under the caret, which is the cart
+/// whose letter the marker is a readout of. Derived from the row's own foot the way
+/// `CAPSULE_Y` is, so a row that stands somewhere else carries the rail with it.
+fn rail_cy() -> f32 {
+    crate::shelf::FOOT_Y - crate::cart::CART_H as f32 * crate::shelf::CENTER_SCALE / 2.0
+}
+
 /// How much of the light a facet keeps when it has turned fully away. Not zero: the end slots
 /// are context — which letters the library has either side of the marker — and context that
 /// has gone black is not context.
@@ -652,6 +677,106 @@ impl Letters {
                 x: cx + x - h * depth * fw as f32 / fh as f32 / 2.0,
                 y: mid_y - h / 2.0,
                 w: h * depth * fw as f32 / fh as f32,
+                h,
+                tex,
+                alpha: state * lit,
+            });
+        }
+    }
+
+    /// The same ring stood on its end: a rail down the right-hand edge of the panel rather
+    /// than a dial above the row.
+    ///
+    /// Nothing here decides which slot is under the marker or how it got there — that is the
+    /// whole of `Letters`, and this only draws it. One map, two views, is the point: swapping
+    /// between them cannot leave two copies of the ring disagreeing about where the library is.
+    ///
+    /// The drum is turned on its side rather than redrawn as a flat list: the facets still
+    /// bunch up towards the ends and one letter plainly owns the middle. A table of contents at
+    /// the edge of the screen loses that cue, and loses with it the sense that this is the same
+    /// control the dial is.
+    pub fn draw_rail(
+        &self,
+        capsule: Option<(TexId, u32, u32)>,
+        faces: &[(TexId, u32, u32)],
+        counts: &[usize; N],
+        ridge: Option<TexId>,
+        out: &mut Vec<Draw>,
+    ) {
+        let cx = rail_cx();
+        let cy = rail_cy();
+        if let Some((tex, w, h)) = capsule {
+            // The housing `draw` uses, turned a quarter turn about its own centre. Turned and
+            // not baked again, so it cannot drift from the dial's; at its own size, so the end
+            // caps stay round — a second rectangle stretched to fit would oval them.
+            out.push(Draw::Turned {
+                x: cx - w as f32 / 2.0,
+                y: cy - h as f32 / 2.0,
+                w: w as f32,
+                h: h as f32,
+                tex,
+                alpha: 1.0,
+                turn: QUARTER_TURN,
+            });
+        }
+
+        let frac = self.scroll - self.scroll.round();
+        let sub = self.scroll.round() as i32;
+
+        // The ridges, ahead of the letters for the reason they go first on the dial: the letter
+        // sits on the facet, and the ridge is the raised join beside it. `- frac` is doing the
+        // same work it does there — without it the metal stays put and the rail slides through
+        // it like a glass tube with lines drawn on.
+        if let Some(tex) = ridge {
+            for b in 0..=VISIBLE * 2 + 1 {
+                let angle = (b as f32 - (VISIBLE as f32 + 0.5) - frac) * FACET;
+                let (along, depth) = drum(angle);
+                if depth <= 0.0 || along.abs() > drum_reach() + RIDGE_W as f32 / 2.0 {
+                    continue;
+                }
+                // The thickness is what is left of the metal facing the eye; the length is the
+                // opening it spans, and that does not change as it turns away.
+                let t = (RIDGE_W as f32 * depth).max(1.0);
+                out.push(Draw::Turned {
+                    x: cx - t / 2.0,
+                    y: cy + along - ridge_h() / 2.0,
+                    w: t,
+                    h: ridge_h(),
+                    tex,
+                    alpha: RIDGE_FLOOR + (1.0 - RIDGE_FLOOR) * depth,
+                    turn: QUARTER_TURN,
+                });
+            }
+        }
+
+        for slot in -VISIBLE..=VISIBLE {
+            let at = (sub + slot).rem_euclid(N as i32) as usize;
+            let Some(&(tex, fw, fh)) = faces.get(at) else {
+                continue;
+            };
+            let offset = slot as f32 - frac;
+            let (along, depth) = drum(offset * FACET);
+            if depth <= 0.0 {
+                continue;
+            }
+            let reach = offset.abs().min(1.0);
+            let px = CENTRE_PX + (NEIGHBOUR_PX - CENTRE_PX) * reach;
+            let state = if counts[at] == 0 {
+                EMPTY
+            } else if reach < 0.5 {
+                1.0
+            } else {
+                NEIGHBOUR
+            };
+            let lit = DEPTH_FLOOR + (1.0 - DEPTH_FLOOR) * depth;
+            // A horizontal-axis drum's own foreshortening, which is the vertical one's rule
+            // through ninety degrees: a pane turned away gives up height and keeps its width.
+            let h = px * depth;
+            let w = px * fw as f32 / fh as f32;
+            out.push(Draw::Tex {
+                x: cx - w / 2.0,
+                y: cy + along - h / 2.0,
+                w,
                 h,
                 tex,
                 alpha: state * lit,

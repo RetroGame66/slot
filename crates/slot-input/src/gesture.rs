@@ -87,6 +87,15 @@ pub enum Action {
     AudioProfileNext,
     /// The same the other way, on SELECT+VOL-.
     AudioProfilePrev,
+    /// Switch which dial the shelf indexes letters with: the drum above the row, or the rail
+    /// down its right edge. Emitted on every screen like the other chords and answered only on
+    /// the shelf, which is the one screen with a library to index.
+    ///
+    /// SELECT+START rather than SELECT+B: START is bound to nothing but the core picker on the
+    /// shelf and reaches no game that has not been paused, so nothing loses a press to this.
+    /// B is every game's most-mashed key and the way out of every screen; even behind SELECT it
+    /// would be the one spare pair likeliest to be hit by accident.
+    LetterNavToggle,
 }
 
 #[derive(Copy, Clone, Default, PartialEq, Eq)]
@@ -463,6 +472,7 @@ fn chord(b: Btn) -> Option<(u16, Action)> {
         Btn::A => (256, Action::CheatToggle),
         Btn::VolUp => (512, Action::AudioProfileNext),
         Btn::VolDown => (1024, Action::AudioProfilePrev),
+        Btn::Start => (2048, Action::LetterNavToggle),
         _ => return None,
     })
 }

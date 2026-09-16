@@ -10,8 +10,9 @@ use slot_store::format_stamp;
 use slot_ui::{
     arrows_hint_face, cart_face, cart_shadow, cheat_row_face, chip_face, chip_shadow_face,
     clean_label, hhmm, hint_face, icon_face, letters, menu_face, photo_face, set_clock_hint_face,
-    shelf_title_face, socket_face, sticker_face, title_face, toast_face, wallpaper_face, word_face,
-    Icon, PowerChoice, StickerFields, Toast, ALERT_PX, BOLT_PX, HUD_ICON_PX, HUD_INK, LEGEND,
+    shelf_title_face, shortcut_hint_face, shortcut_row_face, socket_face, sticker_face, title_face,
+    toast_face, wallpaper_face, word_face, Icon, PowerChoice, StickerFields, Toast, ALERT_PX,
+    BOLT_PX, HUD_ICON_PX, HUD_INK, LEGEND, SHORTCUT_ROWS,
 };
 
 use crate::app::{App, GameRow, LinkRow, Phase};
@@ -353,6 +354,23 @@ impl Frontend {
         let ridge = letters::ridge_face();
         let ridge_id = compositor.create_texture(ridge.w, ridge.h, &ridge.rgba);
         self.session.app_mut().set_letter_ridge_face(ridge_id);
+        // The shortcut card, in the same breath as the drum: twenty-odd rows of fixed string,
+        // none of which can ever change, and opening a help screen is the worst moment to be
+        // asking a font for them.
+        let rows = SHORTCUT_ROWS
+            .iter()
+            .map(|r| {
+                let f = shortcut_row_face(*r);
+                (compositor.create_texture(f.w, f.h, &f.rgba), f.w, f.h)
+            })
+            .collect();
+        let hint = shortcut_hint_face();
+        let hint = (
+            compositor.create_texture(hint.w, hint.h, &hint.rgba),
+            hint.w,
+            hint.h,
+        );
+        self.session.app_mut().set_shortcut_faces(rows, Some(hint));
         // Everything above is one texture per fixed string or glyph: none of it scales with
         // the card, all of it has to be rasterised before the first frame, and it is the last
         // large block left in the boot once the font and the cart faces are accounted for.
@@ -711,7 +729,7 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
 /// Built only once the screen is up: it is a 660 by 228 rasterisation and most sessions never
 /// open it.
 fn sync_about(app: &mut App, compositor: &mut Compositor, state: &mut AboutFace) {
-    if !matches!(app.phase(), Phase::About) {
+    if !matches!(app.phase(), Phase::About { .. }) {
         return;
     }
     let battery = app.battery().map(|b| b.percent);

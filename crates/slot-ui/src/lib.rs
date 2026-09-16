@@ -16,6 +16,7 @@ mod power_menu;
 mod refusal;
 mod shelf;
 mod shell;
+mod shortcuts;
 mod silhouette;
 mod slot_chrome;
 mod sticker;
@@ -60,13 +61,17 @@ pub use shell::{
     lookup_order_is_exact_then_family_then_default, shell_for, table_keys, Finish, Shell,
     DEFAULT_SHELL,
 };
+pub use shortcuts::{
+    draw_row as draw_shortcut_row, hint_face as shortcut_hint_face, row_face as shortcut_row_face,
+    Row as ShortcutRow, HINT as SHORTCUT_HINT, ROWS as SHORTCUT_ROWS, ROW_W as SHORTCUT_ROW_W,
+};
 pub use silhouette::silhouette;
 pub use slot_chrome::{
     draw_empty_slot, ease, edge, housing, opening, recess, set_theme, SlotChrome, ALERT_PX, LIP_H,
     MOUTH_H, MOUTH_W,
 };
 pub use sticker::{
-    draw_sticker, head_rows, sticker_face, sticker_lines, StickerFields, COPYRIGHT, CREDITS, DC,
-    HOME, ORIGIN, STICKER_H, STICKER_W,
+    draw_sticker, draw_sticker_at, head_rows, sticker_face, sticker_lines, StickerFields,
+    COPYRIGHT, CREDITS, DC, HOME, ORIGIN, STICKER_H, STICKER_W,
 };
 pub use toast::{toast_box, toast_face, toast_rect, Toast};

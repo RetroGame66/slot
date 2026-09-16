@@ -403,12 +403,19 @@ fn wordmark(w: u32) -> Option<(Vec<u8>, (u32, u32))> {
 /// screen being laid out, so it is not stretched to fit — and it paints no ground of its own,
 /// so the caller decides what it sits on.
 pub fn draw_sticker(face: Option<TexId>, out: &mut Vec<Draw>) {
+    draw_sticker_at(face, (slot_gfx::OUT_H as f32 - STICKER_H as f32) / 2.0, out);
+}
+
+/// The same label at a height the caller has chosen, which is what a screen that scrolls needs:
+/// the card under it moves, so the label has to be able to leave with it rather than being the
+/// one thing pinned to the middle of the panel.
+pub fn draw_sticker_at(face: Option<TexId>, y: f32, out: &mut Vec<Draw>) {
     let Some(tex) = face else {
         return;
     };
     out.push(Draw::Tex {
         x: (slot_gfx::OUT_W as f32 - STICKER_W as f32) / 2.0,
-        y: (slot_gfx::OUT_H as f32 - STICKER_H as f32) / 2.0,
+        y,
         w: STICKER_W as f32,
         h: STICKER_H as f32,
         tex,
