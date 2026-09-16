@@ -2,9 +2,9 @@
 
 A diff against upstream **`4345cb8bdb`** (2026-09-11, *Merge branch 'feat/core-picker-board'*).
 
-**82 files changed, 6,746 insertions(+), 458 deletions(-)** across the branch — 15 added, 66
-modified, 1 deleted. **The change set proper is 75 of them: 11 added and 64 modified, at 6,242
-insertions and 457 deletions.** The other seven are this fork's notice and repository housekeeping
+**82 files changed, 6,829 insertions(+), 454 deletions(-)** across the branch — 15 added, 66
+modified, 1 deleted. **The change set proper is 75 of them: 11 added and 64 modified, at 6,294
+insertions and 453 deletions.** The other seven are this fork's notice and repository housekeeping
 (§12), which is what lets the tree stand on its own as a public fork of an MIT project.
 
 Everything below is listed by feature rather than by file, because that is how it was built:
@@ -216,7 +216,7 @@ source change set on its own.
 |---|---|
 | `NOTICE.md` | **New.** States that this is a modified fork, names the upstream author and the baseline commit, credits the modifications, lists which bundled parts keep their own licences, and disclaims affiliation. |
 | `README.upstream.md` | **New.** Upstream's README, reproduced unmodified and introduced as such. Its place is here rather than at the tail of `README.md`, where it would have made the fork's front page speak in the upstream author's first person about a release this fork does not ship. |
-| `README.md` | The bilingual banner at the top, and an **About this fork** front page: what the fork adds, what it changes, the controls including the four chords it adds, what goes on the card, and where a binary comes from. |
+| `README.md` | The bilingual banner at the top, and a front page written by the fork rather than by upstream: a *Downloads* section, what the fork adds, what it changes, what it leaves alone, the controls including the four chords it adds, the companion toolbox, what goes on the card, and the licensing position. |
 | `LICENSE` | A second copyright line for the modifications, added beneath the original one. The upstream notice itself is untouched. |
 | `CHANGES.md` | **New in the tree** — it already existed at the root of this package. Copying it in keeps the repository self-contained, since `NOTICE.md` links to it. |
 | `.gitattributes` | **New.** `* text=auto eol=lf`, plus an explicit `binary` for the asset types. Without it, a Windows checkout with `core.autocrlf=true` rewrites every file it touches, and every diff comes back as a whole-file change. |
@@ -226,6 +226,33 @@ source change set on its own.
 Nothing here changes the frontend's behaviour, and no upstream file was relicensed: `slot` and
 every change in this fork stay MIT. The two emulator cores keep MPL-2.0 and GPL-2.0 — which is
 what `licenses/` is there for.
+
+---
+
+## 13. The fork publishes builds
+
+Not a change to the tree, but a change to what the tree is for, so it belongs in the same account.
+
+Upstream is source-only: `README.md` used to say as much, and a reader wanting the frontend had to
+install a cross toolchain first. This fork publishes a **Release** instead, and `README.md` gained a
+*Downloads* section naming it. Two assets:
+
+| Asset | What it is |
+|---|---|
+| `slot-frontend-System-<date>.zip` | The `deploy/` tree, ready to unzip onto a card. Top level is `System/`. |
+| `slot-companion-toolbox-<date>-win64.zip` | A Windows maintenance tool — font subsetting, label pre-scaling, save backup and restore, clock, boot logo — with its source. Not in this tree and not part of `slot`: the frontend neither calls it nor needs it. |
+
+Publishing a **binary** is what turns the licensing note from a caution into an obligation, so it is
+worth being precise about what the frontend asset carries under `System/licenses/`: the MIT notice
+for the frontend and this fork's modifications; `NOTICE.md`; mGBA's MPL-2.0 text with the section
+3.1 notice; gpSP's GPL-2.0 text **and its corresponding source** as `gpsp-<commit>.tar.gz`, which is
+what section 3(a) asks for when object code is conveyed; the OFL text for the card's typeface; and
+an `OFFER.md` stating how that source commit was resolved and what that resolution is worth — the
+libretro buildbot does not publish which commit built a given nightly, so the pairing is an
+inference from a date rather than a proof, and saying so is more honest than implying otherwise.
+
+The asset is assembled by `make_release_assets.py`, which lives beside this package rather than in
+the repository, so it is not part of the diff counted above.
 
 ---
 

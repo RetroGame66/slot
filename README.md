@@ -22,7 +22,7 @@ the fork: what it adds, what it changes, and what the buttons actually do here.
 
 A modified build of `slot`, aimed at a Chinese GBA library living on one SD card.
 
-**82 files changed, +6,746 / −458** against upstream `4345cb8b` — 75 of them the change set proper
+**82 files changed, +6,829 / −454** against upstream `4345cb8b` — 75 of them the change set proper
 (11 new files, 64 modified) and 7 the fork's notice and repository housekeeping. The full account,
 feature by feature and file by file with the reasoning, is in [`CHANGES.md`](CHANGES.md).
 
@@ -31,6 +31,20 @@ letter ring, because a library of hanzi has no alphabetical order of its own; a 
 own cheats, button remap and display settings, so tuning lives with the card instead of with the
 binary; and the picture gained two things it never had — selectable panel-mask presets and a
 colour-correction stage — reachable from the device instead of by rebuilding.
+
+## Downloads
+
+Prebuilt, so a card does not have to be compiled from source first: see
+[**Releases**](https://github.com/RetroGame66/slot/releases).
+
+| Asset | What it is |
+|---|---|
+| `slot-frontend-System-*.zip` | The frontend, ready to unzip onto the card. Top level is `System/`, so its contents go at the card's root. Includes the helper `.bat` files and the third-party licence texts the two emulator cores oblige a distribution to carry. |
+| `slot-companion-toolbox-*-win64.zip` | The Windows maintenance tool described below, with its source. Windows 10 / 11, x64. |
+| `SHA256SUMS.txt` | Hashes for the two above. |
+
+Both are **this fork's** builds, with everything on this page in them. Upstream's releases are a
+different build and contain none of it.
 
 ## What this fork adds
 
@@ -100,6 +114,15 @@ interpreter and its linkage), `verify_slot.py` (a built device binary really is 
 carries the Chinese strings and not the old English ones), `make_zip.py` (pack a `deploy/` tree into
 the zip that goes on a card), `tools/gen_pinyin.py` (regenerate the pinyin table), and
 `crates/slot-ui/examples/face_timing.rs` (time the face builders on the device).
+
+**A Windows companion tool.** `slot-companion-gui.exe` — one standalone window, no browser, no
+Python, no runtime to install — does the card upkeep that would otherwise be a shell session:
+subset the interface font down to the characters the card actually uses, pre-scale `Labels/` art so
+the shelf stops resampling all of it on every boot, back up and restore `Saves/` and `States/`, set
+the device clock from the PC, and swap the boot logo. It talks to the device over `adb`. It is a
+separate download from the frontend and the frontend neither needs it nor knows about it — it is
+here because the fiddly parts of maintaining a card should be a button. Described in
+[The companion toolbox](#the-companion-toolbox).
 
 **Settings that travel with the card** rather than with the binary. `System/` now carries `fonts/`,
 `labels.txt`, `display.txt`, `mask.txt`, `cc.txt`, `audio.txt`, `remap.txt` and `Cheats/`. Every one
@@ -308,15 +331,41 @@ Emerald = gpsp
 The card layout is upstream's; what differs is where the binary comes from.
 
 1. Write the latest [AGS-102](https://github.com/BrandonKowalski/AGS-102) `.img` release to an SD
-   card, and insert it into **Slot 1** — the side with the volume buttons.
-2. Build this fork (see *Building*), then lay its output out on a second SD card as *What goes on
-   the card* describes: the binary and both cores in `System/`, and `licenses/` beside them.
+   card, and insert it into **Slot 1** — the side with the volume buttons. That image is the
+   device's operating system; this frontend is not part of it, and this fork does not change it.
+2. Unzip `slot-frontend-System-*.zip` from the [releases](#downloads) onto a second SD card. Its
+   top level is `System/`, so its contents go at the card's root, `System/licenses/` with them.
+   Building it yourself instead is described in *Building*.
 3. Add `Games/`, `Saves/`, `BIOS/`, `Labels/`, `Wallpapers/` as you like.
 4. Insert that card into **Slot 2** — the side with the power and reset buttons.
 
-**There is no release to download here, and no prebuilt `System/` tree in this repository.** This
-fork is published as source. Upstream's releases are upstream's build and contain none of the
-changes listed above.
+Both cards are ordinary FAT filesystems. Nothing is flashed onto the second one and nothing on it
+is write-protected, so a card laid out by hand and a card built by `task dist:device` are the same
+card. The companion toolbox below is the least tedious way to do that laying out.
+
+## The companion toolbox
+
+A small Windows program, shipped in the releases as `slot-companion-toolbox-*-win64.zip`. It is
+**not** part of the frontend: `slot` does not call it, does not require it, and runs identically
+without it. It exists because the maintenance a card needs — fonts, art, saves, clock, boot logo —
+is otherwise an `adb` shell session, and that is a poor thing to ask of anyone who just wants to
+play. Unzip it anywhere, plug the device in over USB, and double-click the `.exe`; the badge at the
+top reads red for "not connected", green for "connected".
+
+| Button | What it does |
+|---|---|
+| **Subset font** | Reads every game name in the card's `Games/`, then cuts a subset of the full typeface in `fonts/` down to just the characters those names use — plus the interface's own wording, which is why the button can be pressed and the menus still be readable. Pushes the result to `System/fonts/`. Reboot to take effect. The full face is backed up first. |
+| **Restore font** | Pushes the full typeface back over the subset. Reboot to take effect. |
+| **Set clock** | Writes the PC's UTC time to the device's battery-backed clock and sets the timezone (default `Asia/Shanghai`). |
+| **Pre-scale labels** | Resizes the card's `Labels/*.png` down to the cartridge face's own **394x171** — cover-fit and centre-cropped, by the same algorithm `slot`'s `art::cover` uses, so the picture on screen does not change. `slot` otherwise resamples every label at boot (about **74 ms** each, so roughly seven seconds across a hundred carts); pre-scaled art is 1:1 and costs nothing. Idempotent — art that is already that size or smaller is skipped. |
+| **Back up saves** | Pulls `Saves/` (battery saves) and `States/<core>/` (save states) to a timestamped folder on the PC. |
+| **Restore saves** | Pushes a backup back to the device. If the card already holds a save of the same name, it lists them and asks before overwriting. |
+| **Boot logo** | Previews the card's current `bootlogo.bmp` and replaces it: drop any image on the window and it is scaled or cropped to **720x480** and converted to 24-bit BMP. The existing picture is backed up and the write is confirmed once more before it happens, because this writes to the boot partition. |
+
+It is a single self-contained executable — Python, pygame, Pillow, fontTools and `adb` are all
+inside it, so there is nothing to install. It needs no display driver beyond what Windows provides.
+Its source is in the same zip under `source/`, and a newer `adb.exe` placed beside the executable
+takes precedence over the bundled one.
 
 ## Building
 
@@ -364,15 +413,21 @@ frontend or anything in it. A cart's `System/selected_core.ini` picks between th
 serial link hardware mGBA's libretro build does not carry.
 
 The cores keep their own licences, and they are different: **mGBA's libretro build is MPL-2.0**,
-**gpSP's is GPL-2.0**. Their texts are in [`licenses/`](licenses/). This repository distributes no
-binaries, so nothing here is being conveyed under either — but if you **build and hand someone a
-card**, that is a distribution, and GPL-2.0 section 3(a) applies to gpSP: its corresponding source
-has to travel with the binary. Upstream's `dist:device` and `deploy:device` tasks fetch that source
-and drop it in `System/licenses/` for exactly this reason; a hand-built card has to do the same by
-hand.
+**gpSP's is GPL-2.0**. Their texts are in [`licenses/`](licenses/). This repository's source tree
+carries no binaries, so nothing in *it* is conveyed under either licence — but a distributed card
+is, and so is the zip in this fork's releases. That is why the release's `System/licenses/` holds
+what it holds for gpSP: **GPL-2.0 section 3(a)** wants the corresponding source to travel with the
+binary, so it does, as `gpsp-<commit>.tar.gz` in the same directory, with a `.meta` recording how
+that commit was resolved and an `OFFER.md` stating plainly what that resolution is and is not worth
+— the libretro buildbot does not publish which commit built a given nightly, so the pairing is an
+inference from a date, not a proof. mGBA obliges only the notice **MPL-2.0 section 3.1** asks for,
+which `licenses/README.md` gives. Upstream's `dist:device` and `deploy:device` tasks assemble the
+same directory; a card built by hand and handed to someone has to assemble it too.
 
 The rest of what ships:
 
+- The card's typeface in `System/fonts/` is Noto Sans CJK SC Bold, under the SIL Open Font License,
+  which the release zip carries beside it.
 - The device boots [AGS-102](https://github.com/BrandonKowalski/AGS-102), a purpose-made fork of
   [BaseOS](https://github.com/pvaibhav/BaseOS) by @pvaibhav.
 - Type is [Open Sans](https://github.com/googlefonts/opensans), under the SIL Open Font License, and
