@@ -11,6 +11,67 @@
 
 A bespoke, GBA-only frontend for the Anbernic RG SP.
 
+## About this fork
+
+A modified build of `slot`, aimed at a Chinese GBA library living on one SD card. **75 files
+changed, +5,929 / −385**, across eleven feature areas.
+
+Everything structural — boot, the launcher and core picker, emulator plumbing, the libretro cores,
+saves, rewind, the link features — is upstream's and is left alone. What follows is what this fork
+puts on top of it. Full detail, feature by feature and file by file, is in
+[`CHANGES.md`](CHANGES.md); origin and licensing in [`NOTICE.md`](NOTICE.md).
+
+### Added
+
+| What | Why |
+|---|---|
+| **Chinese interface** | The UI is Chinese throughout. The typeface is read off the card at boot rather than baked into the binary, so swapping fonts no longer needs a rebuild — and most of the font payload leaves the binary. |
+| **Pinyin letter ring** | The shelf gains a letter ring grouped by pinyin initial. A Chinese library's file names are hanzi, which carry no alphabetical order of their own. |
+| **Cheat codes** | A per-cart cheat list on the card, browsable and toggled on the device (`SELECT` + `A`). No PC in the loop. |
+| **Audio latency profiles** | `stable` / `balanced` / `strict` — one knob for the gap between the beat you hear and the press the game judges. |
+| **Button remapping** | `System/remap.txt`, per card, so a hand used to a different layout can keep it. |
+| **GB / GBC cartridge art** | Cartridge artwork drawn for GB and GBC carts. **Assets only — not wired to anything yet.** |
+| **Card-side settings** | `display.txt`, `cc.txt`, `mask.txt`, `audio.txt`, `remap.txt`, `Cheats/`, `fonts/` — settings that travel with the card instead of with the binary. |
+| **Build scripts** | `check_glibc.py`, `verify_slot.py`, `make_zip.py`, `tools/gen_pinyin.py`. |
+
+### Changed
+
+| What | Why |
+|---|---|
+| **Colour correction in linear space** | Multiplying in the encoded (gamma) space darkens a half-colour and washes a monochrome backlight out. The correction now runs in linear space, which is what saturation and monochrome actually need. |
+| **Shelf performance** | A cart face costs about 70 ms to build, and a boot used to build every cart before the first frame. Faces are now built off the frame loop against a bounded texture pool: the shelf opens in the time seven faces take, whatever the card holds. |
+| **Backlight in twenty steps, not ten** | Ten was too coarse at the bottom — step 1 was still bright enough to read by in a dark room. |
+| **Cart geometry** | The selected cart sits at 1.5× with its neighbours half off-screen, so the row reads as continuing past the selection rather than as three equal carts. |
+| **Backlight peak colours remapped** | DMG green, ice blue, amber and pink — retuned for the linear-space correction above. |
+| **Documentation** | The control table was wrong: it said `SELECT` + `X` opened a chooser, when it cycles the display preset. That is fixed, and the chords this fork adds (`X` / `Y` / `A` / `VOL±`) are listed. |
+
+### Not changed
+
+Upstream's own work is left as it stands. **All comments in this fork are English**, in the prose
+style the tree already uses. Chinese remains only where it is *data* the program parses and
+compares against — the interface's own translated strings, the hanzi the pinyin table is built
+from, and the `[中]` / `[日]` / `[英]` tags a dumped file name may carry. Those are values, not
+remarks; translating them would break the code.
+
+<details>
+<summary><b>中文简介</b>（点开）</summary>
+
+这是 `slot` 的修改版，面向**单张 SD 卡上的中文 GBA 游戏库**。改了 **75 个文件，+5,929 / −385**，
+覆盖十一个功能域。启动、启动器、模拟器管线、libretro 核心、存档、回退、联机这些底层部分是
+上游的，没有动。
+
+**新增**：中文界面（字体从卡上读，不用重编）；拼音首字母索引环；每卡的金手指列表（机上可浏览、
+`SELECT` + `A` 开关）；音频延迟档（`stable` / `balanced` / `strict`）；按键重映射；GB/GBC 卡带美术
+（**仅素材，还没接上**）；随卡走的设置文件；几个构建脚本。
+
+**改动**：色彩校正在**线性空间**做（在编码空间相乘会把半色调压暗、把单色背光冲淡）；卡带封面
+改在帧循环外构建并用有界纹理池（原先开机要把所有卡带建完，每张约 70 ms）；背光 10 档改 20 档；
+选中卡带放大 1.5 倍、相邻半出屏；四种背光峰值色重调；修正 README 里写错的控制表。
+
+逐条说明见 [`CHANGES.md`](CHANGES.md)，来源与许可见 [`NOTICE.md`](NOTICE.md)。
+
+</details>
+
 ## Controls
 
 ### Anywhere
