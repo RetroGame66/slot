@@ -104,7 +104,7 @@ fn the_link_row_is_absent_under_mgba_not_merely_refused() {
     let (mut app, _d) = playing_on(Core::Mgba);
     app.apply(Action::GameMenu);
     assert!(
-        !app.game_menu_rows().iter().any(|r| r.contains("Link")),
+        !app.game_menu_rows().iter().any(|r| r.contains("联机")),
         "an mGBA cart was shown a row whose fix is four steps away on the shelf"
     );
     // Link is the only row this menu has today, so under mGBA there is nothing to show and
@@ -141,7 +141,7 @@ fn the_link_row_offers_host_and_join() {
     let (mut app, _d) = playing_on(Core::Gpsp);
     app.apply(Action::GameMenu);
     app.apply(Action::GbaDown(Btn::A));
-    assert_eq!(app.game_menu_rows(), vec!["Host", "Join"]);
+    assert_eq!(app.game_menu_rows(), vec!["主机", "加入"]);
 }
 
 /// B backs out one step at a time. The player one press into a two-press choice is not

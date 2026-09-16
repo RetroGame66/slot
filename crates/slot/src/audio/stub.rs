@@ -43,7 +43,7 @@ impl Default for StubSink {
 }
 
 impl AudioSink for StubSink {
-    fn open(&mut self, sample_rate: u32) -> Result<(), AudioError> {
+    fn open(&mut self, sample_rate: u32, _profile: super::Profile) -> Result<(), AudioError> {
         self.ring.reopen(sample_rate);
         Ok(())
     }

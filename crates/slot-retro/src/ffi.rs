@@ -158,6 +158,14 @@ pub struct Api {
     pub unserialize: unsafe extern "C" fn(*const c_void, usize) -> bool,
     pub get_memory_data: unsafe extern "C" fn(c_uint) -> *mut c_void,
     pub get_memory_size: unsafe extern "C" fn(c_uint) -> usize,
+    /// Optional: libretro names this `retro_cheat_set` (the intuitive `retro_set_cheat` name
+    /// does NOT exist, so looking it up under that name silently yields `None` and every cheat
+    /// no-ops). Not every core exports it (gpSP does not), so this is `None` for a core with no
+    /// cheat support and the call site skips it.
+    pub set_cheat: Option<unsafe extern "C" fn(c_uint, bool, *const c_char)>,
+    /// Optional: `retro_cheat_reset` — clears the core's cheat list before a fresh `set_cheat`
+    /// pass. Also absent on cores without cheat support.
+    pub cheat_reset: Option<unsafe extern "C" fn()>,
 }
 
 impl Api {
@@ -190,6 +198,20 @@ impl Api {
             unserialize: get!("retro_unserialize"),
             get_memory_data: get!("retro_get_memory_data"),
             get_memory_size: get!("retro_get_memory_size"),
+            // Optional export: libretro calls this `retro_cheat_set` (the intuitive
+            // `retro_set_cheat` name does not exist, so looking it up under that name silently
+            // yields `None` and every cheat no-ops). A core without cheats simply does not link
+            // this symbol, and the read falls through to `None`. Kept out of the `get!` macro
+            // because it must not hard-fail the whole core load the way a missing required symbol would.
+            set_cheat: lib
+                .get::<unsafe extern "C" fn(c_uint, bool, *const c_char)>(b"retro_cheat_set\0")
+                .ok()
+                .map(|s| *s),
+            // `retro_cheat_reset` — optional, clears the cheat list before re-applying.
+            cheat_reset: lib
+                .get::<unsafe extern "C" fn()>(b"retro_cheat_reset\0")
+                .ok()
+                .map(|s| *s),
         })
     }
 }

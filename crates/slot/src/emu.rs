@@ -9,7 +9,7 @@ use slot_retro::{
     ButtonMask, Link, LinkChannel, RetroCore, Rumble, GBA_H, GBA_W, NETPACKET_RELIABLE,
 };
 
-use crate::audio::Ring;
+use crate::audio::{Profile, Ring};
 use crate::drc::{drc_ratio, drc_target};
 use crate::frames::{FrameRef, Frames};
 use crate::persist::Snapshot;
@@ -99,6 +99,10 @@ enum Cmd {
     /// Drops the transport — which is what actually closes the wire, see `TcpLink`'s `Drop`
     /// — and marks the session no longer active.
     EndLink,
+    /// (Re)apply the cheat list. Each entry is `(enabled, code)`; the index in the list is the
+    /// slot mGBA builds its table from. Sent from the frontend, applied on the emulator thread
+    /// like every other core call.
+    SetCheats(Vec<(bool, String)>),
 }
 
 struct Shared {
@@ -141,6 +145,7 @@ impl EmuHandle {
         ring: Arc<Ring>,
         sav: Option<Vec<u8>>,
         resume: Option<Vec<u8>>,
+        profile: Profile,
     ) -> Self {
         // Taken before the core goes to its thread, which is the last moment this side can
         // reach it. `net()` exactly once, for the same reason `rumble()` is: `RetroCore`'s
@@ -173,6 +178,7 @@ impl EmuHandle {
             frames: frames.clone(),
             shared: shared.clone(),
             cmds: rx,
+            profile,
         };
         // A clone rather than the value itself: the worker needs its own handle to pump every
         // frame, and this side keeps one so `EmuHandle::net` can hand it out too.
@@ -221,6 +227,14 @@ impl EmuHandle {
     /// request as far as the worker is concerned.
     pub fn end_link(&self) {
         let _ = self.cmds.send(Cmd::EndLink);
+    }
+
+    /// (Re)apply the cheat list. Each entry is `(enabled, code)` — the index in the list is the
+    /// slot the core's cheat table is built from, so re-sending the same list with a flipped
+    /// `enabled` toggles that code without the core losing track of which is which. A core with
+    /// no `retro_cheat_set` (gpSP) simply no-ops each call.
+    pub fn set_cheats(&self, list: Vec<(bool, String)>) {
+        let _ = self.cmds.send(Cmd::SetCheats(list));
     }
 
     pub fn set_input(&self, mask: ButtonMask) {
@@ -372,6 +386,10 @@ struct Worker {
     frames: Arc<Frames>,
     shared: Arc<Shared>,
     cmds: Receiver<Cmd>,
+    /// The audio profile this session was inserted with. Held here rather than passed through
+    /// `run` because it is fixed for the life of the session — the shelf is where it changes,
+    /// and a change is what reopens the sink and starts the next session with a new value.
+    profile: Profile,
 }
 
 impl Worker {
@@ -478,6 +496,17 @@ impl Worker {
                         // already flowing through it.
                         link.set_active(true);
                         transport = Some(t);
+                    }
+                    Cmd::SetCheats(list) => {
+                        // The index in the list is the slot the core's cheat table is built from,
+                        // so re-sending the same list with a flipped `enabled` toggles the whole
+                        // table without the core losing which code is which. Clear first so a
+                        // shortened list can't leave stale entries enabled. A core with no
+                        // `retro_cheat_set` (gpSP) simply no-ops each call.
+                        core.cheat_reset();
+                        for (i, (enabled, code)) in list.into_iter().enumerate() {
+                            core.set_cheat(i as u32, enabled, &code);
+                        }
                     }
                     Cmd::EndLink => {
                         // `Cmd::BeginLink`'s counterpart: tells the core the session is over,
@@ -610,7 +639,7 @@ impl Worker {
                 // playback down to real time would be pitch shifted noise nobody wants to
                 // hear.
                 if speed == Speed::Normal {
-                    let target = drc_target(ring.capacity_frames());
+                    let target = drc_target(ring.capacity_frames(), self.profile);
                     let queued = ring.queued_frames();
                     resampler.set_ratio(drc_ratio(queued, target));
                     resampler.process(&audio, &mut out);

@@ -2,8 +2,8 @@ use slot_ui::{toast_face, toast_rect, Draw, Hud, HudKind, Toast, OUT_W, PLATE_H}
 
 #[test]
 fn saving_and_loading_say_which_one_happened() {
-    assert_eq!(Toast::StateSaved.text(), "State Saved");
-    assert_eq!(Toast::StateLoaded.text(), "State Loaded");
+    assert_eq!(Toast::StateSaved.text(), "存档已保存");
+    assert_eq!(Toast::StateLoaded.text(), "存档已读取");
 }
 
 #[test]

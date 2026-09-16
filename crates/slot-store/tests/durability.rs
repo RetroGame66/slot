@@ -1,7 +1,7 @@
 mod common;
 
 use common::tmp_root;
-use slot_store::{atomic_write, read_slot_state, write_slot_state, SlotState};
+use slot_store::{atomic_write, read_slot_state, write_slot_state, SlotState, BRIGHTNESS_MAX};
 use tempfile::tempdir;
 
 #[test]
@@ -57,7 +57,7 @@ fn a_slot_state_missing_a_key_reads_as_default_not_half_populated() {
 fn an_out_of_range_level_reads_as_default() {
     let d = tmp_root();
     for body in [
-        "cart=\nbrightness=10\nblue_light=1\nvolume=50\n",
+        "cart=\nbrightness=20\nblue_light=1\nvolume=50\n",
         "cart=\nbrightness=3\nblue_light=10\nvolume=50\n",
         "cart=\nbrightness=3\nblue_light=1\nvolume=101\n",
     ] {
@@ -77,6 +77,28 @@ fn a_first_boot_is_neither_dark_nor_silent() {
     assert!(s.cart.is_none());
     assert!(s.brightness > 0, "boots with the backlight off");
     assert!(s.volume > 0, "boots muted");
+}
+
+/// The top of the ramp is a setting someone can pick, not one past the end of it. Nine was
+/// the top until the scale doubled, and a card written back then still has to read as the
+/// level it named rather than as a corrupt file.
+#[test]
+fn the_top_brightness_step_is_in_range() {
+    let d = tmp_root();
+    for value in [9, BRIGHTNESS_MAX] {
+        std::fs::write(
+            d.path().join("System/slot.state"),
+            format!(
+                "cart=\nbrightness={value}\nblue_light=0\nvolume=60\nmuted=0\nclock_set=1\nutc_offset_min=0\n"
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            read_slot_state(d.path()).brightness,
+            value,
+            "step {value} should be a valid level"
+        );
+    }
 }
 
 /// The offset is what turns the card's UTC into the time on the shelf, so it has to outlive

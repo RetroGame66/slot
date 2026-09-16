@@ -9,6 +9,7 @@ mod draw;
 mod footer;
 mod hud;
 mod icon;
+pub mod letters;
 mod plate;
 mod polaroids;
 mod power_menu;
@@ -31,24 +32,30 @@ pub use board::{
     LID_TURN, ROM_H, ROM_W, ROM_X, ROM_Y, SHADOW_H, SHADOW_W, SLIDE_SHARE, SLIDE_UP, SOCKET_H,
     SOCKET_U, SOCKET_V, SOCKET_W, TURN_PAD,
 };
+pub use cart::face_profile;
+// Re-exported rather than defined here: the rule that turns a file name into a title belongs
+// with the scan, because the ring's letter is decided from it and a scan cannot ask the ui.
+pub use slot_store::{clean_label, label_tags};
+
 pub use cart::{
-    cart_face, cart_shadow, clean_label, label_colour, label_panel, label_tags, label_text,
-    CartFace, CART_H, CART_W, LABEL_H, LABEL_W, LABEL_X, LABEL_Y,
+    cart_face, cart_shadow, label_colour, label_panel, label_text, CartFace, CART_H, CART_W,
+    FACE_H, FACE_SCALE, FACE_W, LABEL_H, LABEL_W, LABEL_X, LABEL_Y,
 };
 pub use clock::{clock_label, hhmm, set_clock_hint_face, ClockPicker, Field};
 pub use draw::{Draw, TexId, OUT_H, OUT_W};
 pub use footer::{draw_footer, Printed};
 pub use hud::{ff_badge, FfState, Hud, HudKind, Millis, HUD_ICON_PX, HUD_INK, HUD_MS, PLATE_H};
 pub use icon::{icon_box, icon_face, Icon};
+pub use letters::Letters;
 pub use plate::{
     arrows_hint_face, arrows_hint_width, cap_width, hint_face, hint_quad, hint_row, hint_width,
-    title_face, word_face, word_width, Hint, UndoFace, ARROW_GAP, CAP, CAP_GAP, HINT_EDGE,
-    HINT_GAP, HINT_H, TITLE_H, TITLE_W,
+    shelf_title_face, title_face, word_face, word_width, Hint, UndoFace, ARROW_GAP, CAP, CAP_GAP,
+    HINT_EDGE, HINT_GAP, HINT_H, SHELF_TITLE_H, SHELF_TITLE_W, TITLE_H, TITLE_W,
 };
 pub use polaroids::{photo_face, PhotoFace, Polaroids, DOT, LEGEND, PHOTO_H, PHOTO_W};
-pub use power_menu::{menu_face, PowerChoice, MENU_PAD};
+pub use power_menu::{cheat_row_face, menu_face, PowerChoice, MENU_PAD};
 pub use refusal::Refusal;
-pub use shelf::Shelf;
+pub use shelf::{Shelf, CENTER_SCALE, SIDE_ALPHA};
 pub use shell::{
     lookup_order_is_exact_then_family_then_default, shell_for, table_keys, Finish, Shell,
     DEFAULT_SHELL,

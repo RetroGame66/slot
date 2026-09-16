@@ -3,7 +3,7 @@ mod common;
 use common::{app_playing_in, boot, tmp_root_with_carts};
 use slot::app::{App, Phase};
 use slot_input::Action;
-use slot_ui::{Draw, CART_W};
+use slot_ui::{Draw, CART_W, CENTER_SCALE};
 
 #[test]
 fn double_tap_menu_with_no_states_shakes_instead_of_doing_nothing() {
@@ -149,11 +149,22 @@ fn drawn(a: &App) -> Vec<Draw> {
     out
 }
 
+/// Where the cart on its way into the slot is drawn.
+///
+/// It is the only cart on screen wider than its own size: the insert walks it back down from
+/// the row's hero scale, and the shelf's own carts are exactly `CART_W` wide now that the row
+/// stops shrinking its neighbours. Asking for `CART_W` would answer with a cart standing in
+/// the row, which does not move with the insert and would pass this for the wrong reason.
 fn cart_x(a: &App) -> f32 {
+    let (cart, hero) = (CART_W as f32, CART_W as f32 * CENTER_SCALE);
     drawn(a)
         .iter()
         .find_map(|d| match d {
-            Draw::Rect { x, w, .. } | Draw::Tex { x, w, .. } if *w == CART_W as f32 => Some(*x),
+            Draw::Rect { x, w, .. } | Draw::Tex { x, w, .. }
+                if *w > cart + 0.01 && *w <= hero + 0.01 =>
+            {
+                Some(*x)
+            }
             _ => None,
         })
         .expect("no cart in the list")

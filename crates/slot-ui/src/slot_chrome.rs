@@ -6,6 +6,7 @@ use slot_store::Theme;
 
 use crate::cart::{label_colour, label_text, CART_H, CART_W};
 use crate::icon::icon_box;
+use crate::shelf::CENTER_SCALE;
 
 /// Big enough to read as a symbol on a 240 px cart rather than as a mark on its label.
 pub const ALERT_PX: f32 = 44.0;
@@ -159,8 +160,19 @@ impl SlotChrome<'_> {
         // on the way through rather than sliding behind a painted bar.
         draw_slot_back(chrome, out);
 
-        let x = CART_X;
-        let y = REST_Y + (SEATED_Y - REST_Y) * travel(seat);
+        // The cart eases from the carousel's enlarged centre scale back to its own size as it
+        // seats, so the size the row showed it at flows into the slot instead of popping.
+        //
+        // Anchored by its foot on the way down, because that is where the row stands it: the
+        // shelf draws the hero with its foot on `FOOT_Y`, so the extra height a larger cart
+        // carries has to push it *up*. Centring it instead lets the extra height out both ways
+        // and the cart drops by half of it the moment the insert starts — a jump of its own,
+        // which is the thing scaling it here was meant to avoid.
+        let cart_scale = CENTER_SCALE + (1.0 - CENTER_SCALE) * seat;
+        let cart_w = CART_W as f32 * cart_scale;
+        let cart_h = CART_H as f32 * cart_scale;
+        let x = CART_X + (CART_W as f32 - cart_w) / 2.0;
+        let y = REST_Y + (SEATED_Y - REST_Y) * travel(seat) + (CART_H as f32 - cart_h);
         // The cart fades with the case rather than through it. A seated cart is really in the
         // slot and has to be drawn, so the whole device face has to leave as one object as the
         // picture takes over. Held at full while the screen is off, which is all of the travel.
@@ -169,8 +181,8 @@ impl SlotChrome<'_> {
             Some(tex) => Draw::Tex {
                 x,
                 y,
-                w: CART_W as f32,
-                h: CART_H as f32,
+                w: cart_w,
+                h: cart_h,
                 tex,
                 alpha: cart_alpha,
             },
@@ -179,8 +191,8 @@ impl SlotChrome<'_> {
                 Draw::Rect {
                     x,
                     y,
-                    w: CART_W as f32,
-                    h: CART_H as f32,
+                    w: cart_w,
+                    h: cart_h,
                     colour: [
                         c[0] as f32 / 255.0,
                         c[1] as f32 / 255.0,
@@ -197,8 +209,8 @@ impl SlotChrome<'_> {
             let (w, h) = icon_box(ALERT_PX);
             let (w, h) = (w as f32, h as f32);
             out.push(Draw::Tex {
-                x: x + (CART_W as f32 - w) / 2.0,
-                y: y + (CART_H as f32 - h) / 2.0,
+                x: x + (cart_w - w) / 2.0,
+                y: y + (cart_h - h) / 2.0,
                 w,
                 h,
                 tex,

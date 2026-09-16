@@ -41,7 +41,7 @@ const CARET_GAP: f32 = 6.0;
 const HINT_DROP: f32 = 48.0;
 
 const SET_CLOCK_KEY: &str = "A";
-const SET_CLOCK_LABEL: &str = "set the clock";
+const SET_CLOCK_LABEL: &str = "设置时钟";
 
 /// Hours and minutes off a ring stamp. Never seconds: a clock showing them is a clock being
 /// watched rather than glanced at.

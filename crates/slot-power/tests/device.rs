@@ -55,11 +55,14 @@ fn platform(d: &TempDir) -> DevicePlatform {
 fn the_backlight_steps_span_whatever_range_the_kernel_reports() {
     let d = sysfs("255", "87");
     let mut p = platform(&d);
-    p.set_backlight(9);
+    p.set_backlight(19);
     assert_eq!(brightness(&d), 255);
-    p.set_backlight(5);
+    p.set_backlight(10);
     let mid = brightness(&d);
-    assert!((110..=160).contains(&mid), "step 5 of 9 wrote {mid} of 255");
+    assert!(
+        (110..=160).contains(&mid),
+        "step 10 of 19 wrote {mid} of 255"
+    );
 }
 
 /// Step 0 is the one the lid closes with, so it has to be the panel actually off. Any floor
@@ -92,7 +95,7 @@ fn a_gauge_that_reads_as_nonsense_is_no_reading_rather_than_zero() {
 fn a_tree_with_neither_a_panel_nor_a_gauge_still_boots() {
     let d = tempfile::tempdir().unwrap();
     let mut p = platform(&d);
-    p.set_backlight(9);
+    p.set_backlight(19);
     assert!(p.battery().is_none());
 }
 
@@ -191,7 +194,7 @@ fn dispdbg(d: &TempDir, file: &str) -> String {
 fn a_tree_with_no_backlight_class_drives_the_panel_through_dispdbg() {
     let d = dispdbg_tree();
     let mut p = DevicePlatform::probe(d.path(), PathBuf::from("/mnt/sdcard"));
-    p.set_backlight(9);
+    p.set_backlight(19);
     assert_eq!(dispdbg(&d, "name"), "lcd0");
     assert_eq!(dispdbg(&d, "command"), "setbl");
     assert_eq!(
@@ -212,7 +215,7 @@ fn a_backlight_class_still_wins_over_dispdbg() {
     let dbg = d.path().join("kernel/debug/dispdbg");
     fs::create_dir_all(&dbg).unwrap();
     fs::write(dbg.join("param"), "").unwrap();
-    platform(&d).set_backlight(9);
+    platform(&d).set_backlight(19);
     assert_eq!(brightness(&d), 255);
     assert_eq!(dispdbg(&d, "param"), "", "dispdbg was written to as well");
 }

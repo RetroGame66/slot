@@ -129,7 +129,12 @@ fn the_whole_pass_from_boot_to_resume() {
     p.chord(Btn::Right); // blue light
     p.tap(Btn::VolUp);
     let levels = read_slot_state(root);
-    assert_eq!(levels.brightness, 6);
+    // One press up from the level a card that has never been set boots at, so this reads the
+    // press rather than a number that moves whenever the ramp is re-cut.
+    assert_eq!(
+        levels.brightness,
+        slot_store::SlotState::default().brightness + 1
+    );
     assert_eq!(levels.blue_light, 1);
     assert_eq!(levels.volume, 65);
     assert_eq!(p.session.app().blue_light(), 1);

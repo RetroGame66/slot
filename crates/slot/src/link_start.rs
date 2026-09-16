@@ -114,8 +114,8 @@ impl LinkStep {
     /// a thing the player has to be told.
     pub fn line(self) -> &'static str {
         match self {
-            LinkStep::Radio => "Bringing the radio up",
-            LinkStep::Waiting => "Looking for the other player",
+            LinkStep::Radio => "正在启动无线连接",
+            LinkStep::Waiting => "正在寻找其他玩家",
         }
     }
 }
@@ -142,10 +142,10 @@ impl LinkFail {
     /// overlay closes on it.
     pub fn line(self) -> &'static str {
         match self {
-            LinkFail::Radio => "The radio did not come up",
-            LinkFail::NobodyCame => "Nobody arrived",
-            LinkFail::PeerVanished => "The other player vanished",
-            LinkFail::Cancelled => "Cancelled",
+            LinkFail::Radio => "无线连接未能启动",
+            LinkFail::NobodyCame => "无人加入",
+            LinkFail::PeerVanished => "对方已断开",
+            LinkFail::Cancelled => "已取消",
         }
     }
 }

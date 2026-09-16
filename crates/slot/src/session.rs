@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use slot_input::{Action, Gestures, Millis, RawEvent};
 use slot_retro::Rumble;
-use slot_ui::FfState;
+use slot_ui::{FfState, Toast};
 
 use crate::app::{App, Phase};
-use crate::audio::{open_sink, AudioSink, Ring, Sfx, GBA_HZ};
+use crate::audio::{open_sink, AudioSink, Profile, Ring, Sfx, GBA_HZ};
 use crate::core::open_core;
 use crate::emu::{CoreState, EmuHandle, Speed};
 use crate::frames::FrameRef;
@@ -21,6 +21,8 @@ pub struct Session {
     /// Opened once and outliving every cart. The cart clicks home while it is still on its
     /// way in, which is exactly when there is no core to own a sink.
     sink: Box<dyn AudioSink>,
+    /// The profile the sink was opened for. Applied when the next cart is inserted.
+    audio: Profile,
     gestures: Gestures,
     pad: Pad,
     rewinding: bool,
@@ -33,22 +35,33 @@ pub struct Session {
 impl Session {
     pub fn boot(root: PathBuf) -> Self {
         let mut sink: Box<dyn AudioSink> = open_sink();
+        let audio = crate::root::audio_profile(&root);
         // A frontend for one console knows the rate before it knows the cart. A device that
         // refuses it still opens, and the worker resamples to whatever it did take.
-        if let Err(e) = sink.open(GBA_HZ) {
+        if let Err(e) = sink.open(GBA_HZ, audio) {
             eprintln!("slot: audio: {e}");
         }
-        Session {
-            app: App::boot(&root),
+        let pad_remap = crate::root::remap(&root).unwrap_or_default();
+        // Timed, because a device with no console turns every boot-time change into a matter
+        // of opinion otherwise: the log is the only place the numbers exist.
+        let _ = std::fs::write(root.join("System/boot.log"), "");
+        let scan_at = std::time::Instant::now();
+        let app = App::boot(&root);
+        let scan_ms = scan_at.elapsed().as_millis();
+        let session = Session {
+            app,
             root,
             emu: None,
             sink,
+            audio,
             gestures: Gestures::new(),
-            pad: Pad::default(),
+            pad: Pad::with_remap(pad_remap),
             rewinding: false,
             fast: false,
             motor: 0,
-        }
+        };
+        session.boot_note(&format!("library scan + shelf {}", scan_ms));
+        session
     }
 
     /// Mixed in over whatever the game is already playing, so it lands with the thing on
@@ -206,6 +219,23 @@ impl Session {
             Action::RewindStop => self.rewinding = false,
             Action::FfStart => self.fast = true,
             Action::FfStop => self.fast = false,
+            Action::CheatToggle => {
+                // SELECT+A opens the cheat table (the browsable, per-code list) rather than only
+                // flipping a master flag. Pressed again while the table is up it flips every code
+                // at once — the old master toggle, now reachable from inside.
+                if self.app.cheat_menu().is_some() {
+                    self.app.toggle_all_cheats();
+                    self.push_cheats();
+                    self.app.toast_now(if self.app.cheats_on {
+                        Toast::CheatsOn
+                    } else {
+                        Toast::CheatsOff
+                    });
+                } else {
+                    self.app.open_cheat_menu();
+                }
+                return;
+            }
             _ => {}
         }
         // A button a menu used is not the game's, on either edge of it: the press that opens
@@ -213,6 +243,11 @@ impl Session {
         // the `apply`, because either of those two presses is the one that moves the answer.
         let menu = self.overlaid();
         self.bridge_link(|app| app.apply(action));
+        // A row toggled inside the cheat table set a flag the table itself cannot act on, because
+        // it has no reach to the emulator. Push the list now that `apply` has run.
+        if self.app.take_cheats_dirty() {
+            self.push_cheats();
+        }
         // After apply: the level the sink wants is the one the action just produced.
         if matches!(
             action,
@@ -259,11 +294,49 @@ impl Session {
         self.sync_rewind_hud();
         self.sync_ff_hud();
         self.sync_rumble();
+        self.sync_audio_profile();
     }
 
     /// The core writes its motor from the emulator thread and this is the one place that
     /// reaches the hardware with it. The phase has the last word: a cart on its way out, a
     /// paused switcher and a doze all stop the motor whatever the core last asked for.
+    /// The shelf is the only screen that can change the audio profile, and the only one where
+    /// applying it is free: the device buffer is fixed when the PCM is opened, so a change
+    /// means reopening the hardware. Guarded on `playing()` as well, so that even a stray
+    /// chord cannot reopen the device under a running game.
+    fn sync_audio_profile(&mut self) {
+        let wanted = self.app.audio_profile();
+        if wanted == self.audio || self.playing() {
+            return;
+        }
+        self.audio = wanted;
+        if let Err(e) = self.sink.open(GBA_HZ, wanted) {
+            eprintln!("slot: audio: {e}");
+        }
+        eprintln!("slot: audio profile {}", wanted.as_str());
+    }
+
+    /// Append a line to `System/boot.log`, which `boot` truncates at every start. The device
+    /// has no console, so a boot being tuned has to leave its timings where a PC can read
+    /// them — and a card is the one thing every one of these has.
+    /// How many carts the shelf is holding. Read only to label the face timing, so the count
+    /// and the duration can be read off the log together.
+    pub fn cart_count(&self) -> usize {
+        self.app.carts().len()
+    }
+
+    pub fn boot_note(&self, line: &str) {
+        use std::io::Write;
+        let path = self.root.join("System/boot.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+
     fn sync_rumble(&mut self) {
         let want = match &self.emu {
             Some(emu) if self.playing() => emu.rumble().strength(),
@@ -345,7 +418,10 @@ impl Session {
     /// The screens that have taken the panel away from a cart still seated. The switcher is
     /// not one of them: it has its own phase and `sync_speed` names it separately.
     fn held(&self) -> bool {
-        self.app.power_menu().is_some() || self.app.game_menu_open() || self.app.shutting_down()
+        self.app.power_menu().is_some()
+            || self.app.game_menu_open()
+            || self.app.shutting_down()
+            || self.app.cheat_menu().is_some()
     }
 
     fn dozing(&self) -> bool {
@@ -464,11 +540,33 @@ impl Session {
             self.sink.ring(),
             persist::read_sav(&self.root, stem),
             resume,
+            self.audio,
         );
         // A cart seated after the level was lowered has to start there, not at full.
         emu.set_volume(self.app.output_volume());
         self.app.set_snapshot(Box::new(emu.snapshot()));
         self.emu = Some(emu);
+        // Load this cart's cheat list off the card into `App`, then push it to the core. Codes
+        // default to OFF (see `App::set_cheats`), so a cart that ships codes launches with
+        // nothing applied; the player opens the table (SELECT+A) and switches on the ones they
+        // want. SELECT+A while the table is open flips the master `cheats_on` and re-pushes.
+        self.app.set_cheats(crate::root::cheats(&self.root, stem));
+        self.push_cheats();
+    }
+
+    /// (Re)send the current cheat list to the core, each code's enabled ANDed with the master
+    /// `cheats_on`. Cheap: a handful of `retro_cheat_set` calls, and a no-op for a core without
+    /// cheats (gpSP exports no `retro_cheat_set`, so each call no-ops).
+    fn push_cheats(&mut self) {
+        if let Some(emu) = &self.emu {
+            let list: Vec<(bool, String)> = self
+                .app
+                .cheats()
+                .iter()
+                .map(|c| (self.app.cheats_on && c.enabled, c.code.clone()))
+                .collect();
+            emu.set_cheats(list);
+        }
     }
 }
 

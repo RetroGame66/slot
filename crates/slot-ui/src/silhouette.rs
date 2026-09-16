@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use crate::cart::{CART_H, CART_W};
+use crate::cart::{FACE_H, FACE_W};
 
 const CART_SVG: &str = include_str!("../assets/cart.svg");
 const DETAIL_SVG: &str = include_str!("../assets/cart_detail.svg");
@@ -11,16 +11,17 @@ pub fn silhouette(w: u32, h: u32) -> Vec<u8> {
 }
 
 /// Every cart is the same shape, so the mask is rasterised once and multiplied into faces.
+/// Rasterised at the face resolution so the higher-res cart stays crisp.
 pub(crate) fn cart_mask() -> &'static [u8] {
     static MASK: OnceLock<Vec<u8>> = OnceLock::new();
-    MASK.get_or_init(|| silhouette(CART_W, CART_H))
+    MASK.get_or_init(|| silhouette(FACE_W, FACE_H))
 }
 
 /// How far inside the outline each pixel sits, in city block steps, saturating at 255. A
 /// translucent shell fades from its edge inward and needs the distance, not the coverage.
 pub(crate) fn cart_depth() -> &'static [u8] {
     static DEPTH: OnceLock<Vec<u8>> = OnceLock::new();
-    DEPTH.get_or_init(|| depth_map(cart_mask(), CART_W as usize, CART_H as usize))
+    DEPTH.get_or_init(|| depth_map(cart_mask(), FACE_W as usize, FACE_H as usize))
 }
 
 /// Two pass chamfer. Everything off the edge of the buffer counts as outside, so a pixel on
@@ -63,13 +64,14 @@ fn depth_map(mask: &[u8], w: usize, h: usize) -> Vec<u8> {
 pub(crate) fn detail_mask() -> &'static [u8] {
     static MASK: OnceLock<Vec<u8>> = OnceLock::new();
     MASK.get_or_init(|| {
-        rasterise_svg(DETAIL_SVG, CART_W, CART_H)
-            .unwrap_or_else(|| vec![0; (CART_W * CART_H) as usize])
+        let svg = DETAIL_SVG;
+        rasterise_svg(svg, FACE_W, FACE_H).unwrap_or_else(|| vec![0; (FACE_W * FACE_H) as usize])
     })
 }
 
 fn rasterise(w: u32, h: u32) -> Option<Vec<u8>> {
-    rasterise_svg(CART_SVG, w, h)
+    let svg = CART_SVG;
+    rasterise_svg(svg, w, h)
 }
 
 fn rasterise_svg(svg: &str, w: u32, h: u32) -> Option<Vec<u8>> {

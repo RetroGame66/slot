@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 232 260">
+  <!-- Moulded detail for the Game Boy shell, shared by class A, B and C. Shaded into the
+       shell's own colour by the code, never drawn in a fixed colour, so it belongs to
+       whatever plastic the cart is.
+
+       Both shapes are measured against the 58 x 65 mm shell, not traced from a photograph:
+       the top ridge is the ledge the shell steps out at so a thumb has something to pull
+       against, and the lower groove is where the front face drops toward the connector the
+       console's pins reach. The two are the Game Boy's counterparts of the Advance cart's
+       grip ridge and thumb notch -- same two jobs, different ends of the shell.
+
+       If a traced version replaces this file, keep the viewBox and the white fill on
+       everything that should darken: the rasteriser takes coverage, so any colour works. -->
+  <rect x="24" y="30" width="184" height="10" rx="3" fill="#fff"/>
+  <rect x="4" y="236" width="224" height="6" fill="#fff"/>
+</svg>

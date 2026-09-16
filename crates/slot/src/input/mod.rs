@@ -12,4 +12,4 @@ pub mod trace;
 pub use device::DeviceInput;
 #[cfg(feature = "host")]
 pub use host::HostInput;
-pub use mask::Pad;
+pub use mask::{Pad, Remap};

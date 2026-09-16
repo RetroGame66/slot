@@ -73,6 +73,20 @@ pub enum Action {
     PowerOff,
     LidClose,
     LidOpen,
+    /// Cycle the in-game panel mask (OFF / LCD3X 50% / LCD3X 100% / SCANLINE 50% / SCANLINE 100%) on SELECT+X.
+    MaskCycle,
+    /// Cycle the in-game colour correction (FULLCOLOR / HALFCOLOR / NOCOLOR / DMG green / ice-blue / amber / pink) on SELECT+Y.
+    ColorCycle,
+    /// Toggle the cart's cheat list on SELECT+A. The list lives on the card, so this only flips
+    /// it on or off; what is in it is edited on a PC.
+    CheatToggle,
+    /// Step the audio profile (stable / balanced / strict) on SELECT+VOL+. Emitted on every
+    /// screen, like the other chords: this file is blind to which one is up, and it is the app
+    /// that decides where it lands. It lands on the shelf, because applying a profile reopens
+    /// the PCM and only the shelf has nothing playing to interrupt.
+    AudioProfileNext,
+    /// The same the other way, on SELECT+VOL-.
+    AudioProfilePrev,
 }
 
 #[derive(Copy, Clone, Default, PartialEq, Eq)]
@@ -93,8 +107,9 @@ enum Select {
 #[derive(Default)]
 pub struct Gestures {
     select: Select,
-    /// Buttons swallowed by a chord, so their release is swallowed too.
-    chord_held: u8,
+    /// Buttons swallowed by a chord, so their release is swallowed too. `u16` rather than `u8`
+    /// so the chord set can grow past eight buttons (each chord holds one bit).
+    chord_held: u16,
     menu_down_at: Option<Millis>,
     menu_last_tap: Option<Millis>,
     menu_eject_fired: bool,
@@ -203,7 +218,19 @@ impl Gestures {
                 vec![Action::PowerPress]
             }
             Btn::Lid => vec![Action::LidClose],
-            Btn::VolUp | Btn::VolDown => self.volume_press(b, now),
+            Btn::VolUp | Btn::VolDown => {
+                // Let a held SELECT turn the volume keys into the audio-profile chord, the
+                // same way the other chord buttons do. Without this the volume arm swallows
+                // the press before it can reach the `chord` path below, so SELECT+VOL never
+                // switched profiles.
+                let chording = matches!(self.select, Select::Pending(_) | Select::Consumed);
+                if let (true, Some((bit, action))) = (chording, chord(b)) {
+                    self.select = Select::Consumed;
+                    self.chord_held |= bit;
+                    return vec![action];
+                }
+                self.volume_press(b, now)
+            }
             Btn::L2 => self.rewind_start(),
             Btn::R2 => self.ff_down(now),
             _ => {
@@ -224,7 +251,17 @@ impl Gestures {
             Btn::Menu => self.menu_up(now),
             Btn::Power => self.power_up(),
             Btn::Lid => vec![Action::LidOpen],
-            Btn::VolUp | Btn::VolDown => self.volume_release(b),
+            Btn::VolUp | Btn::VolDown => {
+                // Swallow the release of a chorded volume key so it does not reach the volume
+                // control or the core; mirrors the catch-all arm above.
+                if let Some((bit, _)) = chord(b) {
+                    if self.chord_held & bit != 0 {
+                        self.chord_held &= !bit;
+                        return Vec::new();
+                    }
+                }
+                self.volume_release(b)
+            }
             Btn::L2 => self.rewind_stop(),
             Btn::R2 => self.ff_up(now),
             _ => {
@@ -413,7 +450,7 @@ impl Gestures {
     }
 }
 
-fn chord(b: Btn) -> Option<(u8, Action)> {
+fn chord(b: Btn) -> Option<(u16, Action)> {
     Some(match b {
         Btn::Up => (1, Action::BrightnessUp),
         Btn::Down => (2, Action::BrightnessDown),
@@ -421,6 +458,11 @@ fn chord(b: Btn) -> Option<(u8, Action)> {
         Btn::Right => (8, Action::BlueLightUp),
         Btn::L1 => (16, Action::LoadState),
         Btn::R1 => (32, Action::SaveState),
+        Btn::X => (64, Action::MaskCycle),
+        Btn::Y => (128, Action::ColorCycle),
+        Btn::A => (256, Action::CheatToggle),
+        Btn::VolUp => (512, Action::AudioProfileNext),
+        Btn::VolDown => (1024, Action::AudioProfilePrev),
         _ => return None,
     })
 }

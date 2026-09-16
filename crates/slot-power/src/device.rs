@@ -8,10 +8,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{Battery, Charge, LedState, Platform};
 
-/// The top step. Levels are 0 to 9 everywhere above the trait; what that spans in the
+/// The top step. Levels are 0 to 19 everywhere above the trait; what that spans in the
 /// kernel's own units is whatever `max_brightness` says, which is 255 on some panels and
-/// 100 on others.
-const TOP_STEP: u32 = 9;
+/// 100 on others. Twenty steps rather than ten so the bottom of the ramp has room under it:
+/// step 0 is the panel off and step 1 was still bright enough to read by in a dark room.
+const TOP_STEP: u32 = 19;
 
 /// Where the event nodes live. Only the motor is opened from here; the buttons are the
 /// binary's own business.

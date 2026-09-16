@@ -2,9 +2,11 @@ use std::time::{Duration, Instant};
 
 use slot::face_builder::{BuiltFaces, FaceBuilder};
 use slot_store::Cart;
+use slot_ui::{FACE_H, FACE_W, TURN_PAD};
 
 fn cart(stem: &str) -> Cart {
     Cart {
+        initial: slot_store::initial(&slot_store::clean_label(stem)),
         stem: stem.into(),
         rom: format!("Games/{stem}.gba").into(),
         label: None,
@@ -34,7 +36,12 @@ fn a_request_comes_back_as_the_open_carts_faces() {
     assert_eq!(got.len(), 1, "the worker never answered");
     assert_eq!(got[0].stem, "Metroid Fusion");
     assert_eq!((got[0].board.w, got[0].board.h), (372, 209));
-    assert_eq!((got[0].lid.w, got[0].lid.h), (244, 139));
+    // The lid is the cart's face grown by the turn pad on every side, and the face is
+    // rasterised at its own resolution rather than at the width it is drawn.
+    assert_eq!(
+        (got[0].lid.w, got[0].lid.h),
+        (FACE_W + 2 * TURN_PAD, FACE_H + 2 * TURN_PAD)
+    );
 }
 
 /// A caret that ran along the shelf has no use for the carts it passed: the last one asked for

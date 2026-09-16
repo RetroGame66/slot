@@ -1,17 +1,30 @@
 # slot.
 
+> **This is a modified fork.** It is based on
+> [BrandonKowalski/slot](https://github.com/BrandonKowalski/slot) by **Brandon T. Kowalski**
+> (MIT), with changes by [@RetroGame66](https://github.com/RetroGame66) on top.
+> It is **not** the upstream project, and is not endorsed by or affiliated with its author.
+> What changed is in [`CHANGES.md`](CHANGES.md); origin and licensing in [`NOTICE.md`](NOTICE.md).
+>
+> **本仓库是上游 slot 的修改版，非官方版本。** 原作 © Brandon T. Kowalski，MIT 许可；
+> 修改由 [@RetroGame66](https://github.com/RetroGame66) 完成。
+
 A bespoke, GBA-only frontend for the Anbernic RG SP.
 
 ## Controls
 
 ### Anywhere
 
-| Input                       | Action                      |
-|-----------------------------|-----------------------------|
-| `SELECT` + `Up` / `Down`    | Adjust brightness           |
-| `SELECT` + `Left` / `Right` | Adjust blue light           |
-| `VOL+` / `VOL-`             | Change the volume           |
-| `VOL+` + `VOL-`             | Mute, remembering the level |
+| Input                       | Action                                |
+|-----------------------------|---------------------------------------|
+| `SELECT` + `Up` / `Down`    | Adjust brightness                     |
+| `SELECT` + `Left` / `Right` | Adjust blue light                     |
+| `SELECT` + `X`              | Cycle the display preset (panel mask) |
+| `SELECT` + `Y`              | Cycle the colour correction           |
+| `SELECT` + `A`              | Turn the cart's cheat codes on or off |
+| `SELECT` + `VOL+` / `VOL-`  | Step the audio profile                |
+| `VOL+` / `VOL-`             | Change the volume                     |
+| `VOL+` + `VOL-`             | Mute, remembering the level           |
 
 ### On the carousel
 
@@ -53,8 +66,28 @@ Games/        .gba roms.
 Labels/       <rom stem>.png, drawn on the cartridge face. Absent means a text only label.
 Saves/        .sav and .srm battery saves.
 States/       <core>/<rom stem>/, save state rings ten deep per cart.
-System/       the binary, both cores, theme.txt, and selected_core.ini.
+System/       the binary, both cores, and the settings listed below.
 Wallpapers/   .png, one picked at random each boot and drawn behind the shelf.
+```
+
+Everything in `System/` other than the binary and the two cores is optional:
+
+```
+theme.txt          housing / recess / opening / edge, the four colours of the shell.
+selected_core.ini  <rom stem> = <core>, which emulator runs a cart. Every cart defaults to mGBA.
+fonts/             the card's own typeface for the interface. First file by name wins;
+                   System/font.ttf is the single-file spelling of the same thing.
+labels.txt         strip_tags on / off. Off keeps the [中] / [日] / [英] suffixes some packs
+                   use to mark editions, rather than stripping bracketed tags from names.
+display.txt        "mask_mode cc_mode", written when SELECT+X or SELECT+Y changes them.
+audio.txt          stable / balanced / strict, written when SELECT+VOL steps it.
+mask.txt           the card's own 3x3 panel mask, if it ships one.
+cc.txt             the card's own colour-correction matrix, for the NOCOLOR mode.
+remap.txt          physical button remapping, one "<physical> = <game>" per line.
+Cheats/<stem>.txt  one cheat code per line; `#` starts a comment and blank lines are ignored.
+                   A multi-line GameShark or Action Replay code is joined with `+` on one
+                   line. Text after the first `#` is the code's on-device label and never
+                   reaches the core.
 ```
 
 Label art is drawn at 196x86, or about 2.28:1. Anything else is scaled to cover that box

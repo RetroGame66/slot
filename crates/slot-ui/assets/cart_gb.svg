@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 232 260">
+  <!-- Game Boy / Game Boy Color cartridge outline, class A and class B.
+       Same 4 px/mm scale as cart.svg (240 px = 60 mm), so stroke weight and antialiasing
+       come out the same: this shell is 58 x 65 mm, which is 232 x 260 px.
+       Portrait, unlike the Advance cart: 58 mm across and 65 mm tall.
+       The notch in the top edge is the one class A and class B cartridges carry and
+       class C (Game Boy Color only) ones do not -- the locking tab of the original
+       handheld slides into it. The Game Boy Advance slot switch reads the same notch,
+       which is how the console knows to boot in its legacy mode. -->
+  <path d="M12 0 L122 0 L122 9 L146 9 L146 0 L220 0 L232 12 L232 260 L0 260 L0 12 Z" fill="#fff"/>
+</svg>

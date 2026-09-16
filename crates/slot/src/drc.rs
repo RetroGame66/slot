@@ -1,3 +1,5 @@
+use crate::audio::Profile;
+
 /// Widest correction the resampler is allowed to apply. The panel runs 60 Hz against the
 /// GBA's 59.7275, a standing 0.456% surplus, so the bound has to sit just above that or the
 /// buffer would climb with nothing able to pull it back.
@@ -14,8 +16,12 @@ pub fn drc_ratio(queued_frames: usize, target_frames: usize) -> f64 {
     ratio.clamp(1.0 - MAX_CORRECTION, 1.0 + MAX_CORRECTION)
 }
 
-/// Half the device buffer, which leaves equal room to absorb a late emulator frame and a
-/// late device callback.
-pub fn drc_target(capacity_frames: usize) -> usize {
-    capacity_frames / 2
+/// Where the ring should sit, in frames, for the chosen profile.
+///
+/// This is the emulator's lead over the speaker, and therefore the offset a rhythm game judges
+/// against: with `stable` the DRC parks four video frames of audio (66.7 ms) ahead, which is a
+/// comfortable margin against a slow card but a long way from what the player hears.
+/// `Profile::target` owns the numbers; this is only the seam that lets the loop ask for them.
+pub fn drc_target(capacity_frames: usize, profile: Profile) -> usize {
+    profile.target(capacity_frames)
 }

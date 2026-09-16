@@ -1,11 +1,14 @@
 use slot_power::{Battery, Charge};
 use slot_store::Cart;
-use slot_ui::{draw_footer, label_colour, Draw, Printed, Shelf, TexId, CART_W, OUT_W};
+use slot_ui::{
+    draw_footer, label_colour, Draw, Printed, Shelf, TexId, CART_W, CENTER_SCALE, OUT_W,
+};
 
 fn shelf_with(n: usize) -> Shelf {
     Shelf::new(
         (0..n)
             .map(|i| Cart {
+                initial: 'G',
                 stem: format!("Game {i}"),
                 rom: format!("Games/Game {i}.gba").into(),
                 label: None,
@@ -178,8 +181,10 @@ fn an_empty_shelf_is_inert() {
     assert!(placed(&s).is_empty());
 }
 
+/// The row draws its selection larger than the rest, so the cart in hand is the one the eye
+/// lands on, and it sits dead centre.
 #[test]
-fn the_selected_cart_is_centred_and_full_size() {
+fn the_selected_cart_is_centred_and_drawn_as_the_hero() {
     let mut s = shelf_with(5);
     s.right();
     s.right();
@@ -187,7 +192,11 @@ fn the_selected_cart_is_centred_and_full_size() {
     let (x, w) = placed(&s)
         .into_iter()
         .fold((0.0, 0.0), |a, b| if b.1 > a.1 { b } else { a });
-    assert!((w - CART_W as f32).abs() < 0.5, "selected cart is {w} wide");
+    let hero = CART_W as f32 * CENTER_SCALE;
+    assert!(
+        (w - hero).abs() < 0.5,
+        "selected cart is {w} wide, not {hero}"
+    );
     let centre = x + w / 2.0;
     assert!(
         (centre - 360.0).abs() < 0.5,
@@ -363,43 +372,55 @@ fn carts_past_the_edges_of_the_row_are_not_drawn() {
     assert!(n <= 5, "{n} carts drawn into a 720 px row");
 }
 
-/// All three carts have to be wholly on screen. At the old pitch the outer two were clipped
-/// 24px off each edge, so the row read as two and a bit rather than three.
+/// The row reads as continuing past the screen rather than as three equal carts side by side:
+/// the neighbours are deliberately half off each edge, and the only cart wholly on screen is
+/// the one in hand.
 #[test]
-fn all_three_carts_fit_on_screen() {
+fn the_neighbours_run_off_the_edges_and_the_selection_is_whole() {
     let s = shelf_with(5);
     let mut out = Vec::new();
     s.draw(0.0, &mut out);
-    let spans = cart_spans(&out);
+    let mut spans = cart_spans(&out);
     assert_eq!(
         spans.len(),
         3,
         "expected three carts on screen, got {}",
         spans.len()
     );
-    for (x0, x1) in &spans {
-        assert!(*x0 >= 0.0, "a cart starts at {x0}, off the left edge");
-        assert!(
-            *x1 <= OUT_W as f32,
-            "a cart ends at {x1}, off the right edge"
-        );
-    }
+    spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    assert!(
+        spans[0].0 < 0.0,
+        "the left neighbour runs off the left edge here, not from {}",
+        spans[0].0
+    );
+    assert!(
+        spans[2].1 > OUT_W as f32,
+        "the right neighbour runs off the right edge here, not to {}",
+        spans[2].1
+    );
+    assert!(
+        spans[1].0 >= 0.0 && spans[1].1 <= OUT_W as f32,
+        "the selection has to be wholly on screen: {:?}",
+        spans[1]
+    );
 }
 
-/// The edge margin and the gap beside the centre cart should match, or the row looks
-/// crowded on one axis and loose on the other.
+/// The row is symmetric about the selection: whatever the neighbour on one side leaves off the
+/// screen, its opposite leaves off the other, so the two sides read as the same distance out
+/// rather than one crowding the middle.
 #[test]
-fn the_row_is_evenly_spaced() {
+fn the_row_is_symmetric_about_the_selection() {
     let s = shelf_with(5);
     let mut out = Vec::new();
     s.draw(0.0, &mut out);
     let mut spans = cart_spans(&out);
     spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-    let margin = spans[0].0;
-    let gap = spans[1].0 - spans[0].1;
+    let centre = OUT_W as f32 / 2.0;
+    let left = centre - (spans[0].0 + spans[0].1) / 2.0;
+    let right = (spans[2].0 + spans[2].1) / 2.0 - centre;
     assert!(
-        (margin - gap).abs() < 4.0,
-        "edge margin {margin:.1} but gap {gap:.1}: the row is lopsided"
+        (left - right).abs() < 0.5,
+        "the left neighbour sits {left:.1} out and the right {right:.1}: the row is lopsided"
     );
 }
 
@@ -429,7 +450,9 @@ fn the_row_parts_for_the_cart_going_in() {
         out
     };
     let start = at(0.0);
-    let part = at(0.5);
+    // Partway, not half. At this pitch the neighbours are off the screen entirely by the
+    // halfway mark, so the parting has to be sampled while there is still a pair to measure.
+    let part = at(0.35);
     assert_eq!(start.len(), part.len(), "a cart left the row early");
 
     let centre = OUT_W as f32 / 2.0;
@@ -457,7 +480,11 @@ fn dim_darkens_a_side_carts_face_and_not_the_black_under_it() {
     let shadow = TexId::from_raw(99);
     s.set_shadow(shadow);
     let side = TexId::from_raw(11);
-    s.set_faces(vec![TexId::from_raw(10), side, TexId::from_raw(12)]);
+    s.set_faces(vec![
+        Some(TexId::from_raw(10)),
+        Some(side),
+        Some(TexId::from_raw(12)),
+    ]);
     let drawn = |dim: f32| {
         let mut out = Vec::new();
         s.draw_row(Some("Game 0"), 0.0, 0.3, dim, &mut out);

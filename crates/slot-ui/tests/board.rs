@@ -8,12 +8,19 @@ use slot_ui::{
 
 fn cart(stem: &str, code: &str) -> Cart {
     Cart {
+        initial: bucket(stem),
         stem: stem.into(),
         rom: format!("Games/{stem}.gba").into(),
         label: None,
         code: code.into(),
         title: stem.to_uppercase(),
     }
+}
+
+/// The letter the ring files a cart under, derived the way `scan` derives it: from the name the
+/// shelf shows. A fixture that made one up would pass while the real derivation was broken.
+fn bucket(stem: &str) -> char {
+    slot_store::initial(&slot_store::clean_label(stem))
 }
 
 fn rgb(face: &CartFace, x: u32, y: u32) -> [u8; 3] {

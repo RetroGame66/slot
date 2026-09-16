@@ -1,0 +1,13 @@
+# Keep the repository's line endings LF, whatever the platform. Upstream is LF throughout;
+# without this, a Windows checkout with core.autocrlf=true rewrites every file it touches and
+# every diff comes back as "whole file changed".
+* text=auto eol=lf
+
+# Assets git would otherwise be tempted to normalise. Listed explicitly so a future
+# `text=auto` change cannot reach them.
+*.png  binary
+*.webp binary
+*.ttf  binary
+*.mp4  binary
+*.pcm  binary
+*.so   binary

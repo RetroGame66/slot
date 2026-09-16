@@ -5,18 +5,18 @@ use slot_input::{Action, Btn, MUTE_CHORD_MS};
 use slot_power::{Battery, Charge, LedState, LidPolicy, Power};
 use slot_retro::LinkChannel;
 use slot_store::{
-    format_stamp, read_slot_state, scan, write_slot_state, Cart, Core, SlotState, StateEntry,
-    StateRing, Theme, BLUE_LIGHT_MAX, BRIGHTNESS_MAX, RING_MAX, VOLUME_MAX,
+    format_stamp, read_slot_state, scan_cached, write_slot_state, Cart, Core, SlotState,
+    StateEntry, StateRing, Theme, BLUE_LIGHT_MAX, BRIGHTNESS_MAX, RING_MAX, VOLUME_MAX,
 };
 use slot_ui::{
     board_at, board_zoom, draw_backdrop, draw_empty_slot, draw_footer, draw_sticker, ease, grown,
-    lid_at, lift_of, on_board, ClockPicker, Draw, FfState, Hud, HudKind, Icon, Millis, Placed,
-    Polaroids, PowerChoice, Refusal, Shelf, SlotChrome, TexId, Toast, BOARD_W, BOARD_X, CART_W,
-    CHIP_H, CHIP_U, CHIP_V, CHIP_W, HINT_EDGE, HINT_H, HOP_LIFT, SHADOW_H, SHADOW_W, SOCKET_H,
-    SOCKET_U, SOCKET_V, SOCKET_W, TURN_PAD,
+    letters, lid_at, lift_of, on_board, ClockPicker, Draw, FfState, Hud, HudKind, Icon, Letters,
+    Millis, Placed, Polaroids, PowerChoice, Refusal, Shelf, SlotChrome, TexId, Toast, BOARD_W,
+    BOARD_X, CART_H, CART_W, CHIP_H, CHIP_U, CHIP_V, CHIP_W, HINT_EDGE, HINT_H, HOP_LIFT, MOUTH_H,
+    SHADOW_H, SHADOW_W, SHELF_TITLE_H, SOCKET_H, SOCKET_U, SOCKET_V, SOCKET_W, TURN_PAD,
 };
 
-use crate::audio::Sfx;
+use crate::audio::{Profile, Sfx};
 use crate::core_picker::{Chip, CorePicker, Outcome, Press};
 use crate::link_radio::LinkRole;
 use crate::link_start::{link_port, LinkFail, LinkProgress, LinkStarter, LinkStep};
@@ -99,16 +99,25 @@ const POWER_MENU_PITCH: f32 = 44.0;
 /// How much shorter the bar is than the row it marks, top and bottom. Enough that the rows
 /// stay separate things rather than one continuous block when the selection moves.
 const POWER_MENU_BAR_INSET: f32 = 4.0;
+/// The cheat table's row spacing and the most rows it shows before it scrolls. Smaller than the
+/// power menu's pitch because codes are short and there are often many of them.
+const CHEAT_PITCH: f32 = 44.0;
+const CHEAT_VISIBLE: usize = 12;
 /// How far the row makes way while a cart is open, as `Shelf::draw_row` counts `recede`. It is
 /// set by where the neighbours stand: here they come to rest at -41 and 574, where the mockup
 /// frames the open cart with them. Parted far enough for the recede alone to dim them to a
 /// quarter, they left the open cart alone in the frame.
 const CORE_PICKER_RECEDE: f32 = 0.26;
 /// How much further the neighbours' faces darken while a cart is open, since the recede that
-/// stands them in place dims them only part of the way. At it a side cart's face is at
-/// `SIDE_ALPHA * (1 - CORE_PICKER_RECEDE)` = 0.55 * 0.74 = 0.407, and the mockup has it at a
-/// quarter: 0.25 / 0.407 = 0.614.
-const CORE_PICKER_DIM: f32 = 0.614;
+/// stands them in place dims them only part of the way. Just the recede leaves a side cart's
+/// face at `SIDE_ALPHA * (1 - CORE_PICKER_RECEDE)`, and the mockup has the neighbours at a
+/// quarter, so this is what is left to take off.
+///
+/// Derived from the shelf's own `SIDE_ALPHA` rather than written down as a number. It used to
+/// be a literal, computed against the 0.55 `SIDE_ALPHA` of the day, and when the look was
+/// re-cut to 0.7 the literal stayed put: the neighbours came to rest at a third instead of a
+/// quarter, which the test for it caught.
+const CORE_PICKER_DIM: f32 = 0.25 / (slot_ui::SIDE_ALPHA * (1.0 - CORE_PICKER_RECEDE));
 /// The legend's line, under the open cart and clear of the case band.
 const CORE_LEGEND_Y: f32 = 386.0;
 /// The soft oval under the resting lid, as the mockup draws it: its size, how far below the
@@ -200,7 +209,7 @@ impl GameRow {
 
     pub fn text(self) -> &'static str {
         match self {
-            GameRow::Link => "Link",
+            GameRow::Link => "联机",
         }
     }
 }
@@ -223,8 +232,8 @@ impl LinkRow {
 
     pub fn text(self) -> &'static str {
         match self {
-            LinkRow::Host => "Host",
-            LinkRow::Join => "Join",
+            LinkRow::Host => "主机",
+            LinkRow::Join => "加入",
         }
     }
 
@@ -285,9 +294,228 @@ pub enum Phase {
     },
 }
 
+/// Where the shelf's line of type sits: centred in the gap between the row's own foot and
+/// the top of the case. Derived rather than picked, so moving either end — a taller cart, a
+/// deeper bay — carries it along instead of leaving it behind.
+const SHELF_TITLE_Y: f32 = {
+    let foot = (OUT_H + CART_H) as f32 / 2.0;
+    let case = OUT_H as f32 - MOUTH_H;
+    (foot + case) / 2.0 - SHELF_TITLE_H as f32 / 2.0
+};
+
+/// How far short of a letter's first cart the row is put before the spring is let go, when the
+/// letter ring moves the caret rather than the arrow keys.
+///
+/// One, and it cannot be more. The row draws the carts from three either side of the selection
+/// and places them by how far the spring is behind it, so setting it back `k` carts shifts
+/// every one of them `k` places to the right. At one, the three carts that fill a 720 px screen
+/// are still the three it draws — a neighbour, the chosen cart at the right edge, and the one
+/// after it — and the chosen cart slides in from that edge as a side cart and grows into the
+/// hero along the way, which is the row's own flick and not a second animation.
+///
+/// At two it starts off screen instead, and the three carts on screen are the three *before*
+/// it: the flip is watched across carts the user did not ask for, and on a card where faces are
+/// built on demand those are the three that are least likely to have one yet.
+///
+/// So the flip is one cart wide however far the jump was, and it is the dial that says how far
+/// it went. Which is also why the row is not left to travel the whole distance: a jump across
+/// the alphabet crosses hundreds of carts, and a spring crossing all of them would spend
+/// seconds sliding a blur of faces past the eye.
+const LETTER_SEAT_SHORT: f32 = 1.0;
+
+/// How many carts fall under each slot of the letter ring, in `letters::SLOTS` order.
+///
+/// One pass at boot and never again: the card cannot change while slot is running. The dial
+/// reads it to know which letters are worth stopping on and which are drawn dim, so it has to
+/// be counted from the same list the row is drawn from rather than from anything on disk.
+fn tally_letters(carts: &[Cart]) -> [usize; letters::N] {
+    let mut counts = [0usize; letters::N];
+    for cart in carts {
+        counts[letters::slot_of(cart.initial)] += 1;
+    }
+    counts
+}
+
+/// The on-screen picture's two independent knobs.
+///
+/// `mask_mode` picks the panel mask: 0 = OFF (no aperture), 1 = LCD3X at 50% (the shipped LCD3x
+/// grid softened to half strength), 2 = LCD3X at 100% (the full look), 3 = SCANLINE at 50%
+/// (horizontal scanline overlay softened to half strength), 4 = SCANLINE at 100% (the full
+/// scanline look). `cc_mode` picks the colour correction: 0 = FULLCOLOR (identity, 100%
+/// saturation), 1 = HALFCOLOR (picture at 50% saturation — colours dulled halfway to grey),
+/// 2 = NOCOLOR (grayscale / 0% saturation — black & white), and 3..=6 are four tinted-backlight
+/// grayscale palettes (luma kept, hue replaced by a coloured LCD backlight): 3 = DMG green
+/// (Game Boy dot-matrix green), 4 = ice-blue backlight, 5 = amber-orange backlight, 6 = pink
+/// backlight. Each is cycled on its own chord — SELECT+X for the mask, SELECT+Y for the colour —
+/// and the pair is persisted to `System/display.txt` as two integers "mask_mode cc_mode".
+///
+/// HALFCOLOR and the four tinted backlights are done in **linear** (`CC_GAMMA`). Multiplying in
+/// the encoded space darkens a half-colour and washes a tinted backlight out; converting to
+/// linear, multiplying and converting back is what looks right, and is what RetroArch's handheld
+/// shaders do. FULLCOLOR and NOCOLOR still run at gamma 1.0 and behave exactly as they did.
+struct DisplayFilter {
+    /// The card's LCD3x table if it ships one, else the built-in. Only used when `mask_mode` is 1 or 2.
+    lcd3x: [[[u8; 3]; 3]; 3],
+    /// The card's colour matrix (from `cc.txt`) if it ships one, else the NOCOLOR (0% saturation)
+    /// default. Only used when `cc_mode` is 2. The matrix the game pass multiplies the picture by,
+    /// in the spirit of a colour-saturation shader but applied as a single 3x3 multiply so it
+    /// costs nothing here.
+    nocolor_cc: [[f32; 3]; 3],
+    mask_mode: u8,
+    cc_mode: u8,
+}
+impl DisplayFilter {
+    const IDENTITY: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    // NOCOLOR grayscale (0% saturation): plain luma. The whole picture collapses to its luma
+    // (Rec.601 weights 0.299/0.587/0.114), so colours keep their brightness but lose hue
+    // entirely — the "black & white / 灰度" look. This is the mode-2 (NOCOLOR) matrix.
+    // Overridable per card through
+    // System/cc.txt; this is the fallback. Uploaded row-major -> column-major by
+    // `Fbo::set_color_correction`, so this multiplies as written.
+    const DEFAULT_CC: [[f32; 3]; 3] = [
+        [0.299, 0.587, 0.114],
+        [0.299, 0.587, 0.114],
+        [0.299, 0.587, 0.114],
+    ];
+    /// HALFCOLOR (50% saturation): the original picture at half saturation. Each row is a
+    /// luminance blend at s = 0.5 (out_i = 0.5*luma + 0.5*in_i), so the colours come through
+    /// but dulled halfway toward grey — mode 1 (HALFCOLOR). Hardcoded; tune here (or in cc.txt
+    /// for the NOCOLOR row) if you want more or less saturation.
+    const HALF_CC: [[f32; 3]; 3] = [
+        [0.650, 0.294, 0.057],
+        [0.149, 0.794, 0.057],
+        [0.149, 0.294, 0.557],
+    ];
+    /// Four tinted-backlight grayscale palettes. Each keeps the picture's luma (Rec.601
+    /// 0.299/0.587/0.114) but recolours it in the hue of a coloured LCD backlight, by making
+    /// every output channel a scaled copy of the luma: `out_c = (tint_c/255) * luma`. The tint
+    /// colours are lifted from the light palettes of the pixel reader we built before
+    /// (`PXReader/reader.c` light group): GB (DMG green) / LCDB (ice-blue) / SEPIA (amber) /
+    /// PINKBG (pink). Modes 3..=6.
+    /// The gamma the colour correction is done in (the `u_cc_gamma` uniform of `GAME_FRAG`).
+    /// 2.2 is sRGB. Only HALFCOLOR and the four tinted backlights use it; FULLCOLOR (0) and
+    /// NOCOLOR (2) are pushed at 1.0 and so still multiply in the encoded space, bit for bit as
+    /// they did before — the card's `cc.txt` override keeps its meaning for NOCOLOR too.
+    pub const CC_GAMMA: f32 = 2.2;
+    /// The four tinted backlights: the picture's brightness remapped onto a **coloured backlight**.
+    /// Because it is done in linear (see `CC_GAMMA`), a row is "the target colour's linear value
+    /// times the luma weight (0.299/0.587/0.114)". That puts the brightest part of the picture
+    /// exactly on the target colour and lets gamma pull the mid-tones apart, which is what makes
+    /// the tint read as rich. Multiplying in the encoded space, as this used to, washed the
+    /// mid-tones toward grey and left all four looking pale.
+    /// The peak colours: DMG green rgb(155,188,15), ice-blue rgb(120,170,215),
+    /// amber rgb(240,165,60), pink rgb(240,130,185).
+    const DMG_GREEN_CC: [[f32; 3]; 3] = [
+        [0.1000, 0.1963, 0.0381],
+        [0.1529, 0.3002, 0.0583],
+        [0.0006, 0.0012, 0.0002],
+    ];
+    const ICE_BLUE_CC: [[f32; 3]; 3] = [
+        [0.0569, 0.1118, 0.0217],
+        [0.1225, 0.2406, 0.0467],
+        [0.2054, 0.4033, 0.0783],
+    ];
+    const AMBER_CC: [[f32; 3]; 3] = [
+        [0.2617, 0.5137, 0.0998],
+        [0.1147, 0.2253, 0.0438],
+        [0.0124, 0.0243, 0.0047],
+    ];
+    const PINK_CC: [[f32; 3]; 3] = [
+        [0.2617, 0.5137, 0.0998],
+        [0.0679, 0.1333, 0.0259],
+        [0.1476, 0.2898, 0.0563],
+    ];
+    /// The neutral aperture the LCD3x modes sit between: an everywhere-white table, so OFF is a
+    /// clean framebuffer and the two LCD3x steps are the grid at half and full strength.
+    const FLAT_MASK: [[[u8; 3]; 3]; 3] = [[[255u8; 3]; 3]; 3];
+    /// A horizontal scanline overlay: the top row of each 3-line cell is the dark gap, the other
+    /// two are lit. Used at full strength for mode 4; mode 3 is this lerped halfway from FLAT.
+    const SCANLINE_MASK: [[[u8; 3]; 3]; 3] = [[[0u8; 3]; 3], [[255u8; 3]; 3], [[255u8; 3]; 3]];
+    fn new(
+        lcd3x: [[[u8; 3]; 3]; 3],
+        nocolor_cc: [[f32; 3]; 3],
+        (mask_mode, cc_mode): (u8, u8),
+    ) -> Self {
+        Self {
+            lcd3x,
+            nocolor_cc,
+            mask_mode: mask_mode.min(4),
+            cc_mode: cc_mode.min(6),
+        }
+    }
+    /// Mask rides on top of the picture: 0 is clear, 1 the LCD3x grid at 50%, 2 at full strength,
+    /// 3 the scanline overlay at 50%, 4 at full strength.
+    fn applied_mask(&self) -> [[[u8; 3]; 3]; 3] {
+        match self.mask_mode {
+            0 => Self::FLAT_MASK,
+            1 => lerp_mask(&Self::FLAT_MASK, &self.lcd3x, 0.5),
+            2 => self.lcd3x,
+            3 => lerp_mask(&Self::FLAT_MASK, &Self::SCANLINE_MASK, 0.5),
+            _ => Self::SCANLINE_MASK,
+        }
+    }
+    /// Colour correction rides under the mask; mode 0 is identity, 1 the HALFCOLOR grade, 2 the
+    /// NOCOLOR luma, 3 DMG green backlight, 4 ice-blue, 5 amber, 6 pink.
+    fn applied_cc(&self) -> [[f32; 3]; 3] {
+        match self.cc_mode {
+            0 => Self::IDENTITY,
+            1 => Self::HALF_CC,
+            2 => self.nocolor_cc,
+            3 => Self::DMG_GREEN_CC,
+            4 => Self::ICE_BLUE_CC,
+            5 => Self::AMBER_CC,
+            6 => Self::PINK_CC,
+            _ => Self::PINK_CC,
+        }
+    }
+    fn cycle_mask(&mut self) {
+        self.mask_mode = (self.mask_mode + 1) % 5;
+    }
+    fn cycle_cc(&mut self) {
+        self.cc_mode = (self.cc_mode + 1) % 7;
+    }
+}
+
+/// Linearly blend two 3x3 aperture tables, element by element, at `t` in [0,1]. Used to soften
+/// the LCD3x grid to a 50% strength for the middle mask step.
+fn lerp_mask(a: &[[[u8; 3]; 3]; 3], b: &[[[u8; 3]; 3]; 3], t: f32) -> [[[u8; 3]; 3]; 3] {
+    let mut out = [[[0u8; 3]; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            for k in 0..3 {
+                let av = a[i][j][k] as f32;
+                let bv = b[i][j][k] as f32;
+                out[i][j][k] = (av + (bv - av) * t).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    out
+}
+
+/// One cheat code for the seated cart, plus whether it is live. `enabled` is per-code; the
+/// master `cheats_on` in `App` gates the lot — a code switched on but under a master that is
+/// off does nothing, exactly as a global toggle over a picker of switches should.
+pub(crate) struct CheatItem {
+    pub(crate) code: String,
+    pub(crate) desc: String,
+    pub(crate) enabled: bool,
+}
+
 pub struct App {
     phase: Phase,
     shelf: Shelf,
+    /// The letter ring over the shelf: where the dial is, and how far it still has to turn.
+    letters: Letters,
+    /// How many carts sit under each of the ring's slots, in `letters::SLOTS` order. Built
+    /// once from the scan and never again — the card does not change while slot is running.
+    /// The dial needs it to know which letters are worth stopping on, and which are drawn dim.
+    letter_counts: [usize; letters::N],
+    /// One small face per slot, in that order with the size each was rasterised at, the housing
+    /// the drum shows through, and the ridge that joins two of its facets. Uploaded at boot:
+    /// 27 letters of a fixed alphabet is less work than one cart face.
+    letter_faces: Vec<(TexId, u32, u32)>,
+    letter_capsule_face: Option<(TexId, u32, u32)>,
+    letter_ridge_face: Option<TexId>,
     /// When A went down on the shelf, and `None` the rest of the time. The hold lives here
     /// rather than in the gesture layer because A is the GBA's A button everywhere else, and
     /// `Gestures` is deliberately blind to which screen is up.
@@ -299,6 +527,12 @@ pub struct App {
     /// say so. `None` for an eject the user asked for: nothing was refused.
     refused_from: Option<f32>,
     alert_face: Option<TexId>,
+    /// The game under the eye on the shelf, rasterised by the frontend whenever the selection
+    /// moves — one line under the row naming what the row is showing. The cart carries a
+    /// printed label of its own, but that label is a 240 px cart's: at the distance a handheld
+    /// is held it says which of three carts is which, not which game this is, and a long title
+    /// on it is three small lines rather than a name.
+    shelf_title_face: Option<(TexId, u32, u32)>,
     /// What the shutdown says, one per `PowerChoice::ALL` in that order and rastered at the
     /// menu's own size. "Powering down" under a restart was the screen contradicting the row
     /// the user had just chosen.
@@ -413,6 +647,28 @@ pub struct App {
     bolt: Option<TexId>,
     shelf_clock: slot_ui::Printed,
     hud: Hud,
+    /// Whether the cart's cheat list (from `System/Cheats/<stem>.txt`) is currently applied to
+    /// the core. Toggled by SELECT+A in game; persists across eject/reinsert within a session.
+    pub(crate) cheats_on: bool,
+    /// The seated cart's cheat codes, each with its own on/off. Loaded from
+    /// `System/Cheats/<stem>.txt` when its core spawns; `set_cheats` rebuilds it and shuts the
+    /// table. Browsable and switchable one by one in the cheat table (SELECT+A).
+    cheats: Vec<CheatItem>,
+    /// `Some` while the cheat table overlay is up, holding the row in hand. `None` otherwise.
+    cheat_menu: Option<usize>,
+    /// One rasterised row face per cheat, in cheat order, (re)built by the frontend when the
+    /// seated cart changes. The ON/OFF state is drawn live beside each, so these never change
+    /// on a toggle.
+    cheat_faces: Vec<(TexId, u32, u32)>,
+    /// The stem whose faces `cheat_faces` currently holds, so the frontend re-rasterises only
+    /// when the cart under the highlight actually changes.
+    cheat_face_stem: Option<String>,
+    /// The "no cheats for this cart" panel, rasterised once at boot and shown when the table
+    /// opens on a cart that carries none.
+    cheat_empty_face: Option<(TexId, u32, u32)>,
+    /// Set when a row is toggled inside the table, so `Session` knows to re-push the list to
+    /// the core after `apply` returns (the table itself cannot reach the emulator).
+    cheats_dirty: bool,
     /// How far up the game layer's own screen is. Not a phase: it outlives the insert, since
     /// the cart is home and the chrome is still on screen while the picture arrives.
     screen: f32,
@@ -444,18 +700,30 @@ pub struct App {
     /// computed from already lives, so every `Platform` gets the deduplication for free instead
     /// of each one having to grow its own copy of it.
     last_led: Option<LedState>,
+    /// In-game display filter (panel mask + colour correction), cycled with SELECT+X.
+    display: DisplayFilter,
+    /// The audio latency profile, chosen on the shelf with SELECT+VOL. Read from
+    /// `System/audio.txt` at boot and written back whenever it changes.
+    audio: Profile,
     powering_off: bool,
 }
 
 impl App {
     pub fn new(carts: Vec<Cart>) -> Self {
+        let letter_counts = tally_letters(&carts);
         App {
             phase: Phase::Shelf,
             shelf: Shelf::new(carts),
+            letters: Letters::new(),
+            letter_counts,
+            letter_faces: Vec::new(),
+            letter_capsule_face: None,
+            letter_ridge_face: None,
             play_held: None,
             refusal: None,
             refused_from: None,
             alert_face: None,
+            shelf_title_face: None,
             shutdown_faces: Vec::new(),
             power_menu: None,
             power_menu_faces: Vec::new(),
@@ -495,6 +763,13 @@ impl App {
             bolt: None,
             shelf_clock: slot_ui::Printed::default(),
             hud: Hud::new(),
+            cheats_on: true,
+            cheats: Vec::new(),
+            cheat_menu: None,
+            cheat_faces: Vec::new(),
+            cheat_face_stem: None,
+            cheat_empty_face: None,
+            cheats_dirty: false,
             screen: 0.0,
             game_ready: false,
             clock: 0.0,
@@ -506,6 +781,12 @@ impl App {
             battery: None,
             last_led: None,
             powering_off: false,
+            audio: Profile::default(),
+            display: DisplayFilter::new(
+                slot_gfx::builtin_panel_mask(),
+                DisplayFilter::DEFAULT_CC,
+                (2, 0),
+            ),
         }
     }
 
@@ -515,11 +796,26 @@ impl App {
     pub fn boot(root: &Path) -> Self {
         crate::root::ensure(root);
         crate::root::migrate(root);
+        // Read the card's label preference (strip_tags) before the first scan, so the displayed
+        // and filed names both honour it. A missing file leaves the long-standing default.
+        slot_store::init_label_config(root);
         // Before anything is drawn. The card's palette cannot change while the device is on,
         // so it is read once and never asked for again.
         slot_ui::set_theme(Theme::read(root));
-        let mut app = App::new(scan(root).unwrap_or_default());
+        // The cached scan, not the plain one: a boot re-reads only the carts that changed
+        // since the last one, which on a card of a few hundred games is the difference
+        // between a shelf and a wait. See `slot_store::scan_cached`.
+        let mut app = App::new(scan_cached(root).unwrap_or_default());
         app.root = Some(root.to_path_buf());
+        // The display filter (panel mask + colour correction) is read from the card so the
+        // shipping look can be a per-card choice, then cycled live during play. The mask falls
+        // back to the built-in LCD3x table; the colour correction falls back to the NOCOLOR (0%
+        // default; the modes fall back to (2, 0) (LCD3X + OFF, the shipped look).
+        let lcd3x = crate::root::panel_mask(root).unwrap_or_else(slot_gfx::builtin_panel_mask);
+        let nocolor_cc = crate::root::color_correction(root).unwrap_or(DisplayFilter::DEFAULT_CC);
+        let modes = crate::root::display_modes(root);
+        app.display = DisplayFilter::new(lcd3x, nocolor_cc, modes);
+        app.audio = crate::root::audio_profile(root);
         app.state = read_slot_state(root);
         if app.state.clock_set {
             app.start();
@@ -531,6 +827,72 @@ impl App {
             };
         }
         app
+    }
+
+    /// The mask the game pass should multiply by right now, resolved through the current mask_mode
+    /// (white when the mask is cycled off). Pushed to the compositor every frame.
+    pub fn display_mask(&self) -> [[[u8; 3]; 3]; 3] {
+        self.display.applied_mask()
+    }
+
+    /// The colour-correction matrix for the game pass right now, identity when off.
+    pub fn display_cc(&self) -> [[f32; 3]; 3] {
+        self.display.applied_cc()
+    }
+
+    /// The gamma the current colour correction should run at: FULLCOLOR (0) and NOCOLOR (2) stay
+    /// at 1.0, multiplying in the encoded space as before, while HALFCOLOR (1) and the four
+    /// tinted backlights (3..=6) use `CC_GAMMA` and are done in linear.
+    pub fn display_cc_gamma(&self) -> f32 {
+        match self.display.cc_mode {
+            0 | 2 => 1.0,
+            _ => DisplayFilter::CC_GAMMA,
+        }
+    }
+
+    /// The audio profile the shelf has settled on. `Session::sync_audio_profile` is what
+    /// notices a change and reopens the device for it.
+    pub fn audio_profile(&self) -> Profile {
+        self.audio
+    }
+
+    /// SELECT+VOL+ / SELECT+VOL- on the shelf: step the audio profile and persist it to
+    /// `System/audio.txt`. Nothing is reopened here — the sink belongs to the session, and
+    /// this only decides what it should open for.
+    fn cycle_audio(&mut self, forward: bool) {
+        self.audio = if forward {
+            self.audio.next()
+        } else {
+            self.audio.prev()
+        };
+        if let Some(root) = &self.root {
+            crate::root::write_audio_profile(root, self.audio);
+        }
+        // The profile moves no pixel of the picture, so this line is the only thing that tells
+        // the player the press landed at all.
+        let said = match self.audio {
+            Profile::Stable => Toast::AudioStable,
+            Profile::Balanced => Toast::AudioBalanced,
+            Profile::Strict => Toast::AudioStrict,
+        };
+        self.hud.toast(said, self.now());
+    }
+
+    /// SELECT+X: advance the panel mask (OFF -> LCD3X 50% -> LCD3X 100% -> SCANLINE 50% ->
+    /// SCANLINE 100%) and persist both modes to `System/display.txt`.
+    fn cycle_mask(&mut self) {
+        self.display.cycle_mask();
+        if let Some(root) = &self.root {
+            crate::root::write_display_modes(root, self.display.mask_mode, self.display.cc_mode);
+        }
+    }
+    /// SELECT+Y: advance the colour correction (FULLCOLOR -> HALFCOLOR -> NOCOLOR -> DMG green ->
+    /// ice-blue -> amber -> pink backlight) and persist both modes to `System/display.txt`.
+    fn cycle_cc(&mut self) {
+        self.display.cycle_cc();
+        if let Some(root) = &self.root {
+            crate::root::write_display_modes(root, self.display.mask_mode, self.display.cc_mode);
+        }
     }
 
     /// Into the slot or onto the shelf. Reached on boot once the clock is known, and from
@@ -563,6 +925,12 @@ impl App {
             // A cart the library no longer has is an empty slot. Left uncorrected on disk:
             // the next seat rewrites it, and a boot is the worst moment to need a write.
             None => self.state.cart = None,
+        }
+        // The dial starts on the letter of whatever the row is showing. Snapped rather than
+        // turned to: there is no previous position at a boot, and a strip arriving from `#`
+        // would be the shelf's first movement being one nobody made.
+        if let Some(cart) = self.shelf.carts.get(self.shelf.index) {
+            self.letters.snap_to(cart.initial);
         }
     }
 
@@ -645,14 +1013,97 @@ impl App {
         &self.shelf.carts
     }
 
+    /// Which cart the caret is on. Read by the boot path to decide which faces are worth
+    /// rasterising before the first frame, and by the background filler to order the rest.
+    pub fn shelf_index(&self) -> usize {
+        self.shelf.index
+    }
+
     /// Exactly one cart on the card. The shelf is unreachable and eject is refused.
     pub fn single_cart(&self) -> bool {
         self.shelf.carts.len() == 1
     }
 
-    /// Face textures in `carts` order. Only the compositor can mint a `TexId`.
-    pub fn set_faces(&mut self, faces: Vec<TexId>) {
+    /// Face textures in `carts` order; `None` where the face is still being rasterised.
+    /// Only the compositor can mint a `TexId`.
+    pub fn set_faces(&mut self, faces: Vec<Option<TexId>>) {
         self.shelf.set_faces(faces);
+    }
+
+    /// One face, uploaded after `set_faces`, as the background filler finishes it.
+    pub fn set_face(&mut self, i: usize, tex: TexId) {
+        self.shelf.set_face(i, Some(tex));
+    }
+
+    /// Forgets a face whose texture has been released.
+    pub fn clear_face(&mut self, i: usize) {
+        self.shelf.clear_face(i);
+    }
+
+    /// Which face texture a cart is currently holding, if any.
+    pub fn face_of(&self, i: usize) -> Option<TexId> {
+        self.shelf.face_of(i)
+    }
+
+    /// One face per slot in `letters::SLOTS` order, each with the size it was rasterised at,
+    /// uploaded at boot. The sizes come with them because a face cropped to its ink is as wide
+    /// as the letter is, and drawing it without them would set every letter to one width.
+    pub fn set_letter_faces(&mut self, faces: Vec<(TexId, u32, u32)>) {
+        self.letter_faces = faces;
+    }
+
+    /// The ridge between two facets of the drum, one texture for every one of them: they differ
+    /// only in where they are and how far they have turned.
+    pub fn set_letter_ridge_face(&mut self, face: TexId) {
+        self.letter_ridge_face = Some(face);
+    }
+
+    /// The stadium the strip sits in, with its size.
+    pub fn set_letter_capsule_face(&mut self, face: TexId, w: u32, h: u32) {
+        self.letter_capsule_face = Some((face, w, h));
+    }
+
+    /// Up or down on the shelf: move the dial one letter and bring the row with it.
+    ///
+    /// The ring keeps the repeat, so this is the press and nothing else. The caret is seated
+    /// on the first cart of the letter it landed on — that is the whole point of the dial —
+    /// and it is seated *short*, so the row flips back through the last few carts into place
+    /// instead of the spring having to cross however many hundred carts the jump covered.
+    fn step_letters(&mut self, by: i32, now: Millis) {
+        let counts = self.letter_counts;
+        if !self.letters.hold(by, now, &counts) {
+            return;
+        }
+        self.seat_on_letter();
+    }
+
+    /// The same move, without a press behind it: the repeat of a held key.
+    fn repeat_letters(&mut self, now: Millis) {
+        let counts = self.letter_counts;
+        if self.letters.tick(now, &counts) {
+            self.seat_on_letter();
+        }
+    }
+
+    /// Puts the caret on the first cart of the letter the dial is showing, and puts the row
+    /// just behind it so the spring plays the move.
+    fn seat_on_letter(&mut self) {
+        let slot = self.letters.target();
+        let Some(i) = self
+            .shelf
+            .carts
+            .iter()
+            .position(|c| letters::slot_of(c.initial) == slot)
+        else {
+            // A slot the dial can only have reached by being counted as non-empty, so this is
+            // unreachable; the next frame's `centre_on` puts the dial back if it ever happens.
+            return;
+        };
+        self.shelf.index = i;
+        // A held arrow key is a direction the shelf is no longer travelling in, and leaving
+        // it armed would fire a cart step over the letter that was just chosen.
+        self.shelf.release_hold();
+        self.shelf.seat_short_of(LETTER_SEAT_SHORT);
     }
 
     /// Handed over when the core is spawned, which is on the way into the slot.
@@ -890,6 +1341,15 @@ impl App {
                 _ => return self.power_menu_input(action),
             }
         }
+        // The cheat table owns every button on the game's side while it is up: up/down move, A
+        // toggles the row, B leaves, and the lid is honoured so the device can still sleep under it.
+        if self.cheat_menu.is_some() {
+            match action {
+                Action::LidClose => return self.doze(),
+                Action::LidOpen => return self.wake(),
+                _ => return self.cheat_menu_input(action),
+            }
+        }
         // The lid, the light and the sound belong to the device rather than to whatever is
         // on screen, so they are taken before the phase gets a look at the action.
         match action {
@@ -956,11 +1416,29 @@ impl App {
                 Action::GbaDown(Btn::Start) if self.core_picker.is_none() => {
                     self.open_core_picker()
                 }
+                // SELECT+X / SELECT+Y cycle the panel mask and colour correction in place on the
+                // shelf (the same chords as in game), guarded so they cannot stack on the core picker.
+                Action::MaskCycle if self.core_picker.is_none() => self.cycle_mask(),
+                Action::ColorCycle if self.core_picker.is_none() => self.cycle_cc(),
+                // SELECT+VOL, and the shelf is the only screen that answers it: the change
+                // reopens the audio device, which is free here and a gap in the sound anywhere
+                // else. See `Action::AudioProfileNext`.
+                Action::AudioProfileNext if self.core_picker.is_none() => self.cycle_audio(true),
+                Action::AudioProfilePrev if self.core_picker.is_none() => self.cycle_audio(false),
                 // Ahead of the shelf's own movement, so an open picker takes the arrows
                 // before the row of carts underneath it does.
                 _ if self.core_picker.is_some() => self.core_picker_input(action),
                 Action::ShelfLeft | Action::GbaDown(Btn::Left) => self.shelf.hold_left(now),
                 Action::ShelfRight | Action::GbaDown(Btn::Right) => self.shelf.hold_right(now),
+                // Up and down are the letter ring, and they are the only thing on this screen
+                // that uses them: the row is left and right, and SELECT turns up and down
+                // into brightness, which `adjust` answers before any of this is reached. So
+                // the dial costs no button and needs no mode — the strip is already on screen
+                // showing which letter the caret is on, and the arrow simply moves it.
+                Action::GbaDown(Btn::Up) => self.step_letters(-1, now),
+                Action::GbaDown(Btn::Down) => self.step_letters(1, now),
+                Action::GbaUp(Btn::Up) => self.letters.release(-1),
+                Action::GbaUp(Btn::Down) => self.letters.release(1),
                 Action::OpenAbout => self.phase = Phase::About,
                 // A is two actions and the press cannot tell them apart yet, so the cart
                 // goes in on the release. The hold has already taken it if it got there
@@ -979,6 +1457,8 @@ impl App {
             Phase::Inserting { .. } if action == Action::Eject => self.eject(),
             Phase::Playing { .. } => match action {
                 Action::Eject => self.eject(),
+                Action::MaskCycle => self.cycle_mask(),
+                Action::ColorCycle => self.cycle_cc(),
                 Action::GameMenu => self.open_game_menu(),
                 Action::Polaroids => self.open_polaroids(),
                 Action::SaveState => self.save_state(),
@@ -1187,6 +1667,7 @@ impl App {
         // back: the row repeats only while it is the thing being looked at.
         if !self.on_shelf() {
             self.shelf.release_hold();
+            self.letters.release_hold();
         }
         let mut touched = false;
         let next = match &mut self.phase {
@@ -1230,6 +1711,20 @@ impl App {
             }
             _ => None,
         };
+        // The dial, after the row has moved rather than as part of it. Out here because it
+        // needs the whole of `self` — the repeat reaches the caret, which is the shelf's — and
+        // the match above is holding `phase` borrowed. The order within it is the order the
+        // three things depend on each other: the repeat may move the dial, the spring may move
+        // it further, and the last line puts the marker back on the cart the row is actually
+        // showing. That last line is what makes the strip a readout as well as a control — an
+        // arrow on the row moves the caret and the dial follows it with nothing telling it to.
+        if self.on_shelf() {
+            self.repeat_letters(now);
+            if let Some(cart) = self.shelf.carts.get(self.shelf.index) {
+                self.letters.centre_on(cart.initial);
+            }
+            self.letters.settle(dt);
+        }
         // One clip for the whole movement, and the only thing done to it is when it starts.
         if touched {
             self.sfx = Some(match self.phase {
@@ -1438,6 +1933,10 @@ impl App {
             self.draw_power_menu(index, out);
             return;
         }
+        if let Some(index) = self.cheat_menu {
+            self.draw_cheat_menu(index, out);
+            return;
+        }
         if self.shutting_down() {
             out.push(Draw::Rect {
                 x: 0.0,
@@ -1492,7 +1991,32 @@ impl App {
                             .draw_row(Some(stem), 0.0, CORE_PICKER_RECEDE * open, dim, out);
                         draw_empty_slot(out);
                     }
-                    _ => self.shelf.draw(self.shelf_shake(), out),
+                    _ => {
+                        self.shelf.draw(self.shelf_shake(), out);
+                        // The dial goes over the row, in the strip the row leaves above itself.
+                        // Not drawn while the picker has the lid off: the strip is a readout of
+                        // where the caret is in the library, and with a cart open there is no
+                        // library on screen for it to be somewhere in.
+                        self.letters.draw(
+                            self.letter_capsule_face,
+                            &self.letter_faces,
+                            &self.letter_counts,
+                            self.letter_ridge_face,
+                            out,
+                        );
+                    }
+                }
+                // After the row and before the case: it names what the row is showing, so it
+                // belongs to the gap the row leaves rather than to the plastic below it.
+                if let Some((tex, w, _)) = self.shelf_title_face {
+                    out.push(Draw::Tex {
+                        x: (OUT_W as f32 - w as f32) / 2.0,
+                        y: SHELF_TITLE_Y,
+                        w: w as f32,
+                        h: SHELF_TITLE_H as f32,
+                        tex,
+                        alpha: 1.0,
+                    });
                 }
                 draw_footer(
                     self.battery,
@@ -1647,6 +2171,10 @@ impl App {
         }
         let u = ((t - from) / span).clamp(0.0, 1.0);
         ((ALERT_GONE - u) / (ALERT_GONE - ALERT_HOLD)).clamp(0.0, 1.0)
+    }
+
+    pub fn set_shelf_title_face(&mut self, face: Option<(TexId, u32, u32)>) {
+        self.shelf_title_face = face;
     }
 
     pub fn set_alert_face(&mut self, face: TexId) {
@@ -2012,6 +2540,7 @@ impl App {
         // comes next, the way `begin_power_off` guards its own chokepoint rather than the
         // one caller that happened to need it.
         self.close_game_menu();
+        self.close_cheat_menu();
         self.flush_eject(&cart);
         // The offer names a file in this cart's ring and a state only this cart's core can
         // read. Carried across the slot it would delete or load the wrong one.
@@ -2085,6 +2614,7 @@ impl App {
         // The overlay is drawn over a game that is about to go dark, and a starter left
         // running behind it would keep a radio up through the doze.
         self.close_game_menu();
+        self.close_cheat_menu();
         // A shut lid is walking away, not choosing. Nothing is written and nothing animates:
         // waking comes back to a plain shelf.
         self.core_picker = None;
@@ -2200,6 +2730,191 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// The seated cart's cheat codes with their live on/off, in file order. Read by the
+    /// frontend to rasterise the table's row faces and by the draw to colour each chip.
+    pub(crate) fn cheats(&self) -> &[CheatItem] {
+        &self.cheats
+    }
+
+    /// Replace the cheat list (called when a cart's core spawns) and close any open table, so a
+    /// switch to a cart with none does not leave the highlight pointing at the old codes.
+    pub(crate) fn set_cheats(&mut self, entries: Vec<crate::root::CheatEntry>) {
+        self.cheats = entries
+            .into_iter()
+            .map(|e| CheatItem {
+                code: e.code,
+                desc: e.desc,
+                // Default every code OFF: the list opens with nothing applied, and the
+                // player switches on only the codes they want. The master `cheats_on`
+                // stays on so a per-row toggle here still takes effect when pushed.
+                enabled: false,
+            })
+            .collect();
+        self.cheat_menu = None;
+    }
+
+    /// `Some` while the cheat table is up, `None` otherwise. Read by `Session` to pause the core
+    /// and to decide what SELECT+A does: open it, or master-toggle-all while it is open.
+    pub fn cheat_menu(&self) -> Option<usize> {
+        self.cheat_menu
+    }
+
+    /// Whether the table's per-row edit needs pushing to the core. Cleared by `Session` once it
+    /// has re-sent the list, because the table cannot reach the emulator itself.
+    pub(crate) fn take_cheats_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.cheats_dirty)
+    }
+
+    /// SELECT+A over a running game. Opens the table — the "see the whole list and pick" screen
+    /// a bare ON/OFF toast never was. The same chord again, while the table is up, flips every
+    /// code at once: the old master toggle, now reachable from inside.
+    pub(crate) fn open_cheat_menu(&mut self) {
+        if self.cheat_menu.is_some() {
+            return;
+        }
+        // The table is the only overlay that should be up while it is; an open in-game menu would
+        // otherwise sit underneath it and steal nothing but still be half-true.
+        self.game_menu = None;
+        self.cheat_menu = Some(0);
+    }
+
+    /// Closes the table without touching any code's state.
+    fn close_cheat_menu(&mut self) {
+        self.cheat_menu = None;
+    }
+
+    /// The master switch behind SELECT+A's second press: flips the lot on or off at once.
+    pub(crate) fn toggle_all_cheats(&mut self) {
+        self.cheats_on = !self.cheats_on;
+    }
+
+    /// The table owns every button on the game's side while it is up. Up and down move, A flips
+    /// the highlighted code, B leaves. The master chord is handled in `Session::act`, before this
+    /// sees the action, so it never arrives here as a toggle.
+    fn cheat_menu_input(&mut self, action: Action) {
+        let Some(index) = self.cheat_menu else {
+            return;
+        };
+        let last = self.cheats.len().saturating_sub(1);
+        match action {
+            Action::GbaDown(Btn::Up) => self.cheat_menu = Some(index.saturating_sub(1)),
+            Action::GbaDown(Btn::Down) => self.cheat_menu = Some((index + 1).min(last)),
+            Action::GbaDown(Btn::A) => {
+                if let Some(item) = self.cheats.get_mut(index) {
+                    item.enabled = !item.enabled;
+                }
+                self.cheats_dirty = true;
+            }
+            Action::GbaDown(Btn::B) => self.close_cheat_menu(),
+            _ => {}
+        }
+    }
+
+    /// The "no cheats" panel, rasterised once at boot. Shown by `draw_cheat_menu` when the table
+    /// opens on a cart that carries no codes.
+    pub(crate) fn set_cheat_empty_face(&mut self, face: (TexId, u32, u32)) {
+        self.cheat_empty_face = Some(face);
+    }
+
+    /// (Re)bind the row faces to a cart's codes, with the stem they belong to so the frontend
+    /// knows when to rebuild. Called from the frontend's per-frame sync.
+    pub(crate) fn set_cheat_faces(&mut self, stem: Option<String>, faces: Vec<(TexId, u32, u32)>) {
+        self.cheat_face_stem = stem;
+        self.cheat_faces = faces;
+    }
+
+    /// The stem whose faces `cheat_faces` currently holds. `None` until the first cart with
+    /// cheats seats, and again after eject.
+    pub(crate) fn cheat_face_stem(&self) -> Option<&str> {
+        self.cheat_face_stem.as_deref()
+    }
+
+    /// How many row faces `cheat_faces` currently holds. Compared against `cheats().len()` so the
+    /// frontend knows to rebuild after the codes load from the card post-spawn.
+    pub(crate) fn cheat_face_count(&self) -> usize {
+        self.cheat_faces.len()
+    }
+
+    /// The cheat table: a dark panel over the paused game, listing every code with a green (on)
+    /// or grey (off) chip, the highlighted row carried on the menu's own bar. A window of
+    /// `CHEAT_VISIBLE` rows scrolls so the highlight stays on screen no matter how long the list.
+    fn draw_cheat_menu(&self, index: usize, out: &mut Vec<Draw>) {
+        out.push(Draw::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: OUT_W as f32,
+            h: OUT_H as f32,
+            colour: slot_ui::opening(),
+        });
+        if self.cheats.is_empty() {
+            if let Some((tex, w, h)) = self.cheat_empty_face {
+                out.push(Draw::Tex {
+                    x: ((OUT_W - w) / 2) as f32,
+                    y: ((OUT_H - h) / 2) as f32,
+                    w: w as f32,
+                    h: h as f32,
+                    tex,
+                    alpha: 1.0,
+                });
+            }
+            return;
+        }
+        let n = self.cheats.len();
+        let vis = n.min(CHEAT_VISIBLE);
+        let start = if n <= CHEAT_VISIBLE {
+            0
+        } else {
+            index
+                .saturating_sub(CHEAT_VISIBLE / 2)
+                .min(n - CHEAT_VISIBLE)
+        };
+        let top = centred_top(vis);
+        let left: f32 = 56.0;
+        for v in 0..vis {
+            let row = start + v;
+            if row >= n {
+                break;
+            }
+            let y = top + CHEAT_PITCH * v as f32;
+            if row == index {
+                out.push(Draw::Rect {
+                    x: 8.0,
+                    y: y + POWER_MENU_BAR_INSET,
+                    w: (OUT_W - 16) as f32,
+                    h: CHEAT_PITCH - 2.0 * POWER_MENU_BAR_INSET,
+                    colour: slot_ui::edge(),
+                });
+            }
+            // ON/OFF chip to the left of the code: green when live, grey otherwise. "Live" means
+            // the code is switched on AND the master is on.
+            let on = self.cheats_on && self.cheats[row].enabled;
+            let iw = 14.0;
+            let ix = 24.0;
+            let iy = y + (CHEAT_PITCH - iw) / 2.0;
+            out.push(Draw::Rect {
+                x: ix,
+                y: iy,
+                w: iw,
+                h: iw,
+                colour: if on {
+                    [0.30, 0.85, 0.45, 1.0]
+                } else {
+                    [0.55, 0.55, 0.6, 1.0]
+                },
+            });
+            if let Some((tex, w, h)) = self.cheat_faces.get(row).copied() {
+                out.push(Draw::Tex {
+                    x: left,
+                    y: y + (CHEAT_PITCH - h as f32) / 2.0,
+                    w: w as f32,
+                    h: h as f32,
+                    tex,
+                    alpha: 1.0,
+                });
+            }
         }
     }
 
@@ -2486,6 +3201,7 @@ impl App {
             self.end_link();
         }
         self.close_game_menu();
+        self.close_cheat_menu();
         self.powering_off = true;
         self.act_at = self.now() + SHUTDOWN_SHOW_MS;
         self.set_led(LedState::Off);
@@ -2696,7 +3412,7 @@ impl App {
         true
     }
 
-    /// `SELECT+R1` and nothing else reaches here. A state with no picture is still worth
+    /// `SELECT+A` and nothing else reaches here. A state with no picture is still worth
     /// keeping: the switcher draws a blank card rather than losing the save.
     ///
     /// Declines outright when the live core refused the resume it was opened with — the same
@@ -2745,8 +3461,8 @@ impl App {
             return None;
         }
         match self.pending.as_ref()?.0 {
-            PendingUndo::Save { .. } => Some("undo save"),
-            PendingUndo::Load { .. } => Some("undo load"),
+            PendingUndo::Save { .. } => Some("撤销存档"),
+            PendingUndo::Load { .. } => Some("撤销读取"),
         }
     }
 
@@ -2785,6 +3501,13 @@ impl App {
     /// happened: a refusal shakes instead.
     pub fn toast(&self) -> Option<Toast> {
         self.hud.said(self.now())
+    }
+
+    /// Show a toast from outside `App` — the in-game cheat toggle, which the session drives
+    /// because the core it reaches lives on the emulator thread. `now` is read off the app's own
+    /// clock so the fade lines up with everything else the HUD says.
+    pub fn toast_now(&mut self, t: Toast) {
+        self.hud.toast(t, self.now());
     }
 
     /// One shot, and it hands the game back the way loading does. Undoing an undo would be a

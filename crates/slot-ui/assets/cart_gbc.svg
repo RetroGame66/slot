@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 232 260">
+  <!-- Game Boy Color only cartridge (class C): the same 58 x 65 mm shell as cart_gb.svg with
+       the top notch removed. Nintendo cut that notch out of class C shells so they could not
+       latch into the original Game Boy, and the shape is the whole of the lockout -- which
+       also makes it the cleanest thing to carry into a shelf: a class C cart is visibly a
+       different object from a class A or B one, and the header says which it is. -->
+  <path d="M12 0 L220 0 L232 12 L232 260 L0 260 L0 12 Z" fill="#fff"/>
+</svg>

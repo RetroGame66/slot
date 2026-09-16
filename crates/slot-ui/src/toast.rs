@@ -5,16 +5,32 @@ use crate::icon::{haloed, HALO_PX};
 use crate::text;
 use crate::CartFace;
 
-/// Everything the HUD ever says in words. Two lines and no third: a toast is confirmation of
-/// something the user just did, never a message.
+/// Everything the HUD ever says in words. One line, and never a third: a toast is
+/// confirmation of something the user just did, never a message.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Toast {
     StateSaved,
     StateLoaded,
+    CheatsOn,
+    CheatsOff,
+    /// The three audio latency profiles, shown on the shelf when SELECT+VOL steps them. They
+    /// are the only confirmation that setting has: it changes no pixel of the picture, so
+    /// without the line there is nothing on screen to say it moved.
+    AudioStable,
+    AudioBalanced,
+    AudioStrict,
 }
 
 impl Toast {
-    pub const ALL: [Toast; 2] = [Toast::StateSaved, Toast::StateLoaded];
+    pub const ALL: [Toast; 7] = [
+        Toast::StateSaved,
+        Toast::StateLoaded,
+        Toast::CheatsOn,
+        Toast::CheatsOff,
+        Toast::AudioStable,
+        Toast::AudioBalanced,
+        Toast::AudioStrict,
+    ];
 
     /// Position in `ALL`, which is the order faces are uploaded in.
     pub fn index(self) -> usize {
@@ -23,8 +39,13 @@ impl Toast {
 
     pub fn text(self) -> &'static str {
         match self {
-            Toast::StateSaved => "State Saved",
-            Toast::StateLoaded => "State Loaded",
+            Toast::StateSaved => "存档已保存",
+            Toast::StateLoaded => "存档已读取",
+            Toast::CheatsOn => "金手指已开启",
+            Toast::CheatsOff => "金手指已关闭",
+            Toast::AudioStable => "音频：稳定",
+            Toast::AudioBalanced => "音频：均衡",
+            Toast::AudioStrict => "音频：严格",
         }
     }
 }

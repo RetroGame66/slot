@@ -1,7 +1,7 @@
 use slot_store::scan;
 use slot_ui::{
     cart_face, clean_label, label_colour, label_panel, label_text, silhouette, CART_H, CART_W,
-    LABEL_H, LABEL_W, LABEL_X, LABEL_Y, OUT_W,
+    FACE_H, FACE_W, LABEL_H, LABEL_W, LABEL_X, LABEL_Y, OUT_W,
 };
 use tempfile::TempDir;
 
@@ -54,7 +54,9 @@ fn a_malformed_label_falls_back_to_a_generated_one() {
     std::fs::write(d.path().join("Labels/Broken.png"), b"not a png").unwrap();
     let cart = &scan(d.path()).unwrap()[0];
     let face = cart_face(cart);
-    assert_eq!((face.w, face.h), (CART_W, CART_H));
+    // The face is rasterised at the internal resolution, not at the size it is drawn: the row
+    // scales its selection up, and a texture that is only ever downsampled stays sharp.
+    assert_eq!((face.w, face.h), (FACE_W, FACE_H));
     assert!(face.rgba.iter().any(|b| *b != 0), "face is blank");
 }
 
@@ -70,7 +72,7 @@ fn a_label_that_decodes_is_what_the_face_shows() {
     write_rom(&d, "Labelled.gba", "LABELLED");
     write_label(&d, "Labelled.png", 64, 64, |_, _| [0xd0, 0x20, 0xa0]);
     let face = cart_face(&scan(d.path()).unwrap()[0]);
-    assert_eq!((face.w, face.h), (CART_W, CART_H));
+    assert_eq!((face.w, face.h), (FACE_W, FACE_H));
     for y in [0, LABEL_H / 2, LABEL_H - 1] {
         for x in [0, LABEL_W / 2, LABEL_W - 1] {
             assert_eq!(label_pixel(&face, x, y), [0xd0, 0x20, 0xa0], "at {x},{y}");
@@ -310,8 +312,9 @@ fn a_rom_with_no_header_title_is_labelled_from_its_stem() {
 #[test]
 fn the_cart_shadow_is_the_cart_in_black() {
     let s = slot_ui::cart_shadow();
-    assert_eq!((s.w, s.h), (CART_W, CART_H));
-    let mask = silhouette(CART_W, CART_H);
+    // Same resolution as the face it backs, because it is drawn into the same quad.
+    assert_eq!((s.w, s.h), (FACE_W, FACE_H));
+    let mask = silhouette(FACE_W, FACE_H);
     for (px, cover) in s.rgba.chunks_exact(4).zip(&mask) {
         assert_eq!(&px[..3], &[0, 0, 0], "the shadow is not black");
         assert_eq!(px[3], *cover, "the shadow is not the cart's shape");

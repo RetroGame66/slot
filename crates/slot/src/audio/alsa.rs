@@ -11,19 +11,20 @@ use libloading::Library;
 
 use super::ring::Ring;
 use super::sink::{AudioError, AudioSink};
+use super::Profile;
 
 const SND_PCM_STREAM_PLAYBACK: c_int = 0;
 const SND_PCM_FORMAT_S16_LE: c_int = 2;
 const SND_PCM_ACCESS_RW_INTERLEAVED: c_int = 3;
 const CHANNELS: c_uint = 2;
 
-/// What ALSA is asked to buffer. Two of these are about what the ring targets, so the device
-/// and the emulator agree on how far ahead the audio runs.
-const LATENCY_US: c_uint = 40_000;
-
-/// Frames per write. One video frame at the GBA's rate, so the writer wakes at about the
-/// rate the emulator produces rather than in bursts.
-const PERIOD_FRAMES: usize = 512;
+// What ALSA is asked to buffer, and how many frames go in one write, both come from the
+// audio profile now: `Profile::latency_us` is the device's share of the latency and
+// `Profile::period_frames` is the writer's granularity. They were constants here; moving them
+// onto the profile is what lets the tuning be changed on the device without a rebuild.
+//
+// The two are coupled: ALSA needs at least two periods of buffer, so a request below
+// `2 * period_frames` is quietly rounded up and asking for less buys nothing.
 
 /// Most specific first. `plug:default` leads because both halves are needed and neither is
 /// optional: `default` is where the card's `asound.conf` lives, and on the H700 that file is
@@ -88,7 +89,7 @@ impl Alsa {
         }
     }
 
-    fn open_pcm(&self, rate: u32) -> Result<*mut c_void, AudioError> {
+    fn open_pcm(&self, rate: u32, latency_us: u32) -> Result<*mut c_void, AudioError> {
         let mut last = AudioError::NoDevice;
         for name in DEVICES {
             let Ok(cname) = CString::new(name) else {
@@ -119,7 +120,7 @@ impl Alsa {
                     CHANNELS,
                     rate,
                     1,
-                    LATENCY_US,
+                    latency_us,
                 )
             };
             if err < 0 {
@@ -174,7 +175,7 @@ impl Drop for AlsaSink {
 
 impl AudioSink for AlsaSink {
     /// The PCM is opened on the thread that writes to it, so the handle never crosses one.
-    fn open(&mut self, sample_rate: u32) -> Result<(), AudioError> {
+    fn open(&mut self, sample_rate: u32, profile: Profile) -> Result<(), AudioError> {
         self.close();
         let ring = self.ring.clone();
         let stop = Arc::new(AtomicBool::new(false));
@@ -182,7 +183,7 @@ impl AudioSink for AlsaSink {
         let (ready_tx, ready_rx) = mpsc::channel();
         let join = std::thread::Builder::new()
             .name("slot-audio".into())
-            .spawn(move || match play(&ring, sample_rate) {
+            .spawn(move || match play(&ring, sample_rate, profile) {
                 Ok(device) => {
                     let _ = ready_tx.send(Ok(()));
                     device.run(&ring, &flag);
@@ -217,30 +218,36 @@ impl AudioSink for AlsaSink {
 struct Playback {
     alsa: Alsa,
     pcm: *mut c_void,
+    /// Frames per write, from the profile that opened this PCM.
+    period_frames: usize,
 }
 
-fn play(ring: &Arc<Ring>, sample_rate: u32) -> Result<Playback, AudioError> {
+fn play(ring: &Arc<Ring>, sample_rate: u32, profile: Profile) -> Result<Playback, AudioError> {
     let alsa = Alsa::load()?;
-    let pcm = alsa.open_pcm(sample_rate)?;
+    let pcm = alsa.open_pcm(sample_rate, profile.latency_us())?;
     ring.reopen(sample_rate);
-    Ok(Playback { alsa, pcm })
+    Ok(Playback {
+        alsa,
+        pcm,
+        period_frames: profile.period_frames(),
+    })
 }
 
 impl Playback {
     /// A blocking write per period, which is what paces the whole frontend: the emulator
     /// runs against the ring and the ring drains at exactly the rate the codec plays.
     fn run(&self, ring: &Ring, stop: &AtomicBool) {
-        let mut buf = vec![0i16; PERIOD_FRAMES * CHANNELS as usize];
+        let mut buf = vec![0i16; self.period_frames * CHANNELS as usize];
         while !stop.load(Ordering::Relaxed) {
             ring.fill(&mut buf);
             let mut written = 0;
-            while written < PERIOD_FRAMES {
+            while written < self.period_frames {
                 let at = written * CHANNELS as usize;
                 let frames = unsafe {
                     (self.alsa.writei)(
                         self.pcm,
                         buf[at..].as_ptr() as *const c_void,
-                        (PERIOD_FRAMES - written) as u64,
+                        (self.period_frames - written) as u64,
                     )
                 };
                 if frames < 0 {

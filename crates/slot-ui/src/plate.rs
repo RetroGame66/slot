@@ -44,6 +44,18 @@ const LABEL_MIN_PX: f32 = 10.0;
 const TITLE_PX: f32 = 20.0;
 const TITLE_MIN_PX: f32 = 12.0;
 
+/// The shelf's own line of type: which cart is under the eye, set below the row. Its own size
+/// rather than the top plate's, because it is the only thing on that screen naming the
+/// selection — the cart carries a printed label, but that label is a 240 px cart's, and a
+/// second reading at the size of a caption on the case would not be a second reading at all.
+///
+/// One line, never two: a title that wraps moves its own bottom line every time the row
+/// moves, and the row is the thing being read.
+pub const SHELF_TITLE_W: u32 = 640;
+pub const SHELF_TITLE_H: u32 = 34;
+const SHELF_TITLE_PX: f32 = 24.0;
+const SHELF_TITLE_MIN_PX: f32 = 14.0;
+
 pub struct UndoFace {
     pub rgba: Vec<u8>,
     pub w: u32,
@@ -184,6 +196,30 @@ pub fn title_face(text: &str) -> UndoFace {
         rgba,
         w: TITLE_W,
         h: TITLE_H,
+    }
+}
+
+/// The shelf's line of type: the game under the eye, for the screen below the row. Cut from
+/// the cart's own name rather than the raw filename, so what is set here and what is printed
+/// on the cart are the same words — `slot_store::clean_label` is the one place that decides which
+/// part of a dumped filename is the game and which part is a fact about the dump.
+pub fn shelf_title_face(text: &str) -> UndoFace {
+    let mut rgba = vec![0u8; (SHELF_TITLE_W * SHELF_TITLE_H * 4) as usize];
+    if let Some(font) = text::label_font() {
+        let layout = text::fit(
+            font,
+            text,
+            SHELF_TITLE_W as f32,
+            1,
+            SHELF_TITLE_PX,
+            SHELF_TITLE_MIN_PX,
+        );
+        text::draw_centred(&mut rgba, SHELF_TITLE_W, SHELF_TITLE_H, &layout, INK);
+    }
+    UndoFace {
+        rgba,
+        w: SHELF_TITLE_W,
+        h: SHELF_TITLE_H,
     }
 }
 

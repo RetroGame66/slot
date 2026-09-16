@@ -1,14 +1,61 @@
-use slot_store::Cart;
+use slot_store::{clean_label, Cart};
 
 use crate::art;
 use crate::shell::{shell_for, Finish, Shell};
 use crate::silhouette::{cart_depth, cart_mask, detail_mask};
 use crate::text;
 
+/// Where the time inside `cart_face` goes, accumulated over every call since the last take.
+///
+/// A cart face costs something like 70 ms on this hardware, and the device has no profiler
+/// and no console: this is how "which pass is actually expensive" gets answered from a
+/// `boot.log` on a card instead of by argument.
+pub mod face_profile {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    pub const PHASES: [&str; 6] = ["shell", "label", "mould", "recess", "paste", "clip"];
+
+    static NANOS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+
+    pub fn add(phase: usize, d: Duration) {
+        if let Some(slot) = NANOS.get(phase) {
+            slot.fetch_add(d.as_nanos() as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// Milliseconds per phase, and resets the counters.
+    pub fn take_ms() -> [f64; 6] {
+        let mut out = [0.0; 6];
+        for (i, slot) in NANOS.iter().enumerate() {
+            out[i] = slot.swap(0, Ordering::Relaxed) as f64 / 1e6;
+        }
+        out
+    }
+
+    /// `shell 12.3 label 4.5 ...` — one line, for the boot log.
+    pub fn line() -> String {
+        let ms = take_ms();
+        PHASES
+            .iter()
+            .zip(ms)
+            .map(|(name, v)| format!("{name} {v:.1}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
 /// The traced outline's own aspect, so `cart.svg` rasterises unstretched. Three across a
 /// 720 wide row exactly, so the shelf can show a neighbour either side of the selection.
 pub const CART_W: u32 = 240;
 pub const CART_H: u32 = 135;
+/// Internal face resolution multiplier. The cart face (shell, label, masks) is rasterised and
+/// composited at `FACE_SCALE` times the logical cart size, then the shelf draws it into the
+/// logical `CART_W`×`CART_H` quad. This keeps the centre cart crisp when the shelf scales it up
+/// to 1.5x (and any larger scale): the texture is only ever downsampled, never stretched.
+pub const FACE_SCALE: u32 = 2;
+pub const FACE_W: u32 = CART_W * FACE_SCALE;
+pub const FACE_H: u32 = CART_H * FACE_SCALE;
 
 /// The paper label, inset in the shell rather than covering it: 9% to 91% across and 22.8%
 /// to 86.3% down. The vertical placement is the reference's, and the band it leaves above is
@@ -25,21 +72,23 @@ pub const fn label_panel(w: u32, h: u32) -> (u32, u32, u32, u32) {
     )
 }
 
-pub const LABEL_X: u32 = label_panel(CART_W, CART_H).0;
-pub const LABEL_Y: u32 = label_panel(CART_W, CART_H).1;
-pub const LABEL_W: u32 = label_panel(CART_W, CART_H).2 - LABEL_X;
-pub const LABEL_H: u32 = label_panel(CART_W, CART_H).3 - LABEL_Y;
+/// The label panel is laid out at the higher face resolution, so the title text is rasterised
+/// sharp and only ever downsampled when drawn at the logical cart size.
+pub const LABEL_X: u32 = label_panel(FACE_W, FACE_H).0;
+pub const LABEL_Y: u32 = label_panel(FACE_W, FACE_H).1;
+pub const LABEL_W: u32 = label_panel(FACE_W, FACE_H).2 - LABEL_X;
+pub const LABEL_H: u32 = label_panel(FACE_W, FACE_H).3 - LABEL_Y;
 
-const PAD: u32 = 10;
+const PAD: u32 = 10 * FACE_SCALE;
 const MAX_LINES: usize = 3;
 /// Three lines have to clear the label's height, and Open Sans Bold sets at about 1.36x
 /// the em. The label is landscape now, so it runs out of height long before width.
 const MAX_PX: f32 = LABEL_H as f32 / (MAX_LINES as f32 * 1.36);
-const MIN_PX: f32 = 10.0;
+const MIN_PX: f32 = 10.0 * FACE_SCALE as f32;
 
 /// How far the translucent edge reaches in. Zero at this depth exactly, so a pixel any
 /// further in is the plastic's own colour.
-const RIM: u32 = 4;
+const RIM: u32 = 4 * FACE_SCALE;
 
 pub struct CartFace {
     pub rgba: Vec<u8>,
@@ -51,20 +100,24 @@ pub struct CartFace {
 /// rather than a cart you can see through: over a wallpaper a translucent face is a ghost,
 /// and the shelf's carts are solid objects.
 pub fn cart_shadow() -> CartFace {
-    let mut rgba = Vec::with_capacity((CART_W * CART_H * 4) as usize);
+    let mut rgba = Vec::with_capacity((FACE_W * FACE_H * 4) as usize);
     for cover in cart_mask() {
         rgba.extend_from_slice(&[0, 0, 0, *cover]);
     }
     CartFace {
         rgba,
-        w: CART_W,
-        h: CART_H,
+        w: FACE_W,
+        h: FACE_H,
     }
 }
 
 pub fn cart_face(cart: &Cart) -> CartFace {
+    let t = std::time::Instant::now();
     let shell = shell_for(&cart.code);
     let mut face = shell_face(&shell);
+    face_profile::add(0, t.elapsed());
+
+    let t = std::time::Instant::now();
     let label = match cart
         .label
         .as_deref()
@@ -73,10 +126,24 @@ pub fn cart_face(cart: &Cart) -> CartFace {
         Some(rgba) => rgba,
         None => generated_label(&label_text(cart)),
     };
+    face_profile::add(1, t.elapsed());
+
+    let t = std::time::Instant::now();
     mould_detail(&mut face, &shell);
+    face_profile::add(2, t.elapsed());
+
+    let t = std::time::Instant::now();
     recess_label(&mut face, &shell);
+    face_profile::add(3, t.elapsed());
+
+    let t = std::time::Instant::now();
     paste_label(&mut face, &label);
+    face_profile::add(4, t.elapsed());
+
+    let t = std::time::Instant::now();
     clip_to_silhouette(&mut face);
+    face_profile::add(5, t.elapsed());
+
     face
 }
 
@@ -105,75 +172,8 @@ pub fn label_text(cart: &Cart) -> String {
     clean_label(&cart.stem)
 }
 
-/// A dumped filename carries region and revision tags and separates title from subtitle
-/// with a spaced hyphen. A bare hyphen is part of a word, so `Spider-Man` keeps its own.
-pub fn clean_label(stem: &str) -> String {
-    let mut bare = String::with_capacity(stem.len());
-    let mut depth = 0u32;
-    for ch in stem.chars() {
-        match ch {
-            '(' | '[' => depth += 1,
-            ')' | ']' => depth = depth.saturating_sub(1),
-            _ if depth == 0 => bare.push(ch),
-            _ => {}
-        }
-    }
-
-    let mut out = String::with_capacity(bare.len());
-    for word in bare.split_whitespace().filter(|w| *w != "-") {
-        if !out.is_empty() {
-            out.push(' ');
-        }
-        out.push_str(word);
-    }
-    if out.is_empty() {
-        stem.to_string()
-    } else {
-        out
-    }
-}
-
-/// The bracketed groups `clean_label` throws away, in the order they appeared. A dump's
-/// filename carries them as one run of parentheses — `(USA, Europe) (Rev 1)` — and each group
-/// is one fact about this dump rather than about the game, which is why they are worth
-/// keeping apart from the title instead of inside it.
-///
-/// One tag per group, not per comma: `(USA, Europe)` is a single release in two regions, and
-/// splitting it would claim two.
-pub fn label_tags(stem: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut depth = 0u32;
-    let mut cur = String::new();
-    for ch in stem.chars() {
-        match ch {
-            '(' | '[' => {
-                depth += 1;
-                if depth == 1 {
-                    cur.clear();
-                    continue;
-                }
-            }
-            ')' | ']' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    let t = cur.trim();
-                    if !t.is_empty() {
-                        out.push(t.to_string());
-                    }
-                    continue;
-                }
-            }
-            _ => {}
-        }
-        if depth >= 1 {
-            cur.push(ch);
-        }
-    }
-    out
-}
-
 fn shell_face(shell: &Shell) -> CartFace {
-    let mut rgba = Vec::with_capacity((CART_W * CART_H * 4) as usize);
+    let mut rgba = Vec::with_capacity((FACE_W * FACE_H * 4) as usize);
     let edge = rim_colour(shell.colour);
     for depth in cart_depth() {
         let c = match shell.finish {
@@ -184,8 +184,8 @@ fn shell_face(shell: &Shell) -> CartFace {
     }
     CartFace {
         rgba,
-        w: CART_W,
-        h: CART_H,
+        w: FACE_W,
+        h: FACE_H,
     }
 }
 
@@ -211,7 +211,7 @@ fn lerp(a: [u8; 3], b: [u8; 3], num: u32, den: u32) -> [u8; 3] {
 /// the top and left walls are turned away from it and fall into shadow while the bottom and
 /// right walls catch it. Painted before the label, so the label sits on the floor of the
 /// recess with the wall showing around it.
-const BEVEL: u32 = 3;
+const BEVEL: u32 = 3 * FACE_SCALE;
 
 /// The grip ridge and the thumb notch, cut into the shell. Darkened rather than coloured:
 /// moulded plastic is the same plastic, just turned away from the light.
@@ -246,10 +246,10 @@ fn recess_label(face: &mut CartFace, shell: &Shell) {
     let (x0, y0) = (LABEL_X - BEVEL, LABEL_Y - BEVEL);
     let (x1, y1) = (LABEL_X + LABEL_W + BEVEL, LABEL_Y + LABEL_H + BEVEL);
     let mut put = |x: u32, y: u32, c: [u8; 3]| {
-        if x >= CART_W || y >= CART_H {
+        if x >= FACE_W || y >= FACE_H {
             return;
         }
-        let d = ((y * CART_W + x) * 4) as usize;
+        let d = ((y * FACE_W + x) * 4) as usize;
         face.rgba[d] = c[0];
         face.rgba[d + 1] = c[1];
         face.rgba[d + 2] = c[2];
@@ -283,7 +283,7 @@ fn paste_label(face: &mut CartFace, label: &[u8]) {
             if a == 0 {
                 continue;
             }
-            let d = (((y + LABEL_Y) * CART_W + x + LABEL_X) * 4) as usize;
+            let d = (((y + LABEL_Y) * FACE_W + x + LABEL_X) * 4) as usize;
             for c in 0..3 {
                 face.rgba[d + c] =
                     ((label[s + c] as u32 * a + face.rgba[d + c] as u32 * (255 - a) + 127) / 255)

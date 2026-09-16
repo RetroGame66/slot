@@ -48,7 +48,9 @@ impl Drop for HostAudio {
 }
 
 impl AudioSink for HostAudio {
-    fn open(&mut self, sample_rate: u32) -> Result<(), AudioError> {
+    /// The desktop sink has no profile: cpal's own buffering is the only buffer in the path,
+    /// and it is not the hardware this tuning exists for.
+    fn open(&mut self, sample_rate: u32, _profile: super::Profile) -> Result<(), AudioError> {
         self.close();
         let ring = self.ring.clone();
         let (ready_tx, ready_rx) = mpsc::channel();

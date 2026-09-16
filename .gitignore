@@ -18,3 +18,11 @@
 /target-device
 /target-verify
 /dist-device
+
+# Local-only, added by this fork. None of these belong in a repository: deploy/ holds a built
+# card tree (with the emulator cores in it), toolchain/ is a ~700 MB vendored build environment,
+# and rustup-init.exe is a 14 MB installer. 参考/ is local reference material.
+/deploy/
+/toolchain/
+/参考/
+/rustup-init.exe

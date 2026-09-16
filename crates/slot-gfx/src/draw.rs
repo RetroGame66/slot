@@ -147,9 +147,29 @@ impl Sprites {
         }
     }
 
+    /// Frees one texture and leaves a hole. The slot becomes 0, which every draw and every
+    /// `source` reads as "gone" rather than as a handle to something that no longer exists.
+    ///
+    /// Nothing reuses the index: a released face is rebuilt into a fresh slot when its cart
+    /// comes back into range, so the pool grows with the number of *rebuilds* rather than with
+    /// the number of carts. On a nine-hundred-game card that is the difference between sixteen
+    /// megabytes of shelf and half a gigabyte of it.
+    pub fn release_texture(&mut self, id: TexId) {
+        let Some(slot) = self.textures.get_mut(id.0) else {
+            return;
+        };
+        if *slot == 0 {
+            return;
+        }
+        unsafe {
+            gl::DeleteTextures(1, slot);
+        }
+        *slot = 0;
+    }
+
     /// For the passes that sample a sprite texture without drawing it as a sprite.
     pub fn source(&self, id: TexId) -> Option<gl::types::GLuint> {
-        self.textures.get(id.0).copied()
+        self.textures.get(id.0).copied().filter(|t| *t != 0)
     }
 
     pub fn draw(&self, items: &[Draw], quad: &Quad) {
@@ -170,8 +190,10 @@ impl Sprites {
                     tex,
                     alpha,
                 } => match self.textures.get(tex.0) {
-                    Some(t) => (x, y, w, h, *t, [1.0, 1.0, 1.0, alpha], 0.0),
-                    None => continue,
+                    Some(&t) if t != 0 => (x, y, w, h, t, [1.0, 1.0, 1.0, alpha], 0.0),
+                    // Never drawn, or released since the list was built. A gap in a row of
+                    // carts is filled by the shelf's own placeholder, not by this.
+                    _ => continue,
                 },
                 Draw::Turned {
                     x,
@@ -182,8 +204,8 @@ impl Sprites {
                     alpha,
                     turn,
                 } => match self.textures.get(tex.0) {
-                    Some(t) => (x, y, w, h, *t, [1.0, 1.0, 1.0, alpha], turn),
-                    None => continue,
+                    Some(&t) if t != 0 => (x, y, w, h, t, [1.0, 1.0, 1.0, alpha], turn),
+                    _ => continue,
                 },
                 // The compositor splits the list on these and draws the game pass itself.
                 Draw::Game | Draw::Shot { .. } => continue,

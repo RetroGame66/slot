@@ -8,11 +8,12 @@ use slot_gfx::OUT_W;
 use slot_store::{Cart, Core};
 
 use crate::art;
-use crate::cart::{clean_label, CartFace, CART_H, CART_W};
+use crate::cart::{CartFace, CART_H, CART_W};
 use crate::shelf::FOOT_Y;
 use crate::shell::shell_for;
 use crate::slot_chrome::ease;
 use crate::text;
+use slot_store::clean_label;
 
 const BOARD_SVG: &str = include_str!("../assets/board.svg");
 
@@ -314,7 +315,8 @@ pub fn padded(face: &CartFace, pad: u32) -> CartFace {
 
 /// An empty socket: pads, outline, and the name of the core it is for at half strength.
 pub fn socket_face(core: Core) -> CartFace {
-    let rgba = art::render_svg(SOCKET_SVG, SOCKET_W, SOCKET_H)
+    let svg = SOCKET_SVG;
+    let rgba = art::render_svg(svg, SOCKET_W, SOCKET_H)
         .unwrap_or_else(|| vec![0; (SOCKET_W * SOCKET_H * 4) as usize]);
     let mut face = CartFace {
         rgba,
@@ -330,7 +332,8 @@ pub fn socket_face(core: Core) -> CartFace {
 
 /// The chip, named for the socket it is seated in, or blank in flight. Padded, since it tips.
 pub fn chip_face(core: Option<Core>) -> CartFace {
-    let rgba = art::render_svg(CHIP_SVG, CHIP_W, CHIP_H)
+    let svg = CHIP_SVG;
+    let rgba = art::render_svg(svg, CHIP_W, CHIP_H)
         .unwrap_or_else(|| vec![0; (CHIP_W * CHIP_H * 4) as usize]);
     let mut face = CartFace {
         rgba,

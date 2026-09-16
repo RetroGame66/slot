@@ -32,7 +32,7 @@ const MARGIN: f32 = 16.0;
 /// Every action the switcher takes is on it: an unlabelled button is one nobody presses. The
 /// ways out of the switcher come first and the things done to the state on screen after, since
 /// that is the split the plate is laid out on.
-pub const LEGEND: [(&str, &str); 3] = [("B", "Back"), ("Y", "Delete"), ("A", "Load")];
+pub const LEGEND: [(&str, &str); 3] = [("B", "返回"), ("Y", "删除"), ("A", "读取")];
 /// How many of `hints` belong to the left end of the plate. The rest go to the right, the undo
 /// with them: undoing acts on the entry under the eye, as loading it does.
 const WAYS_OUT: usize = 2;

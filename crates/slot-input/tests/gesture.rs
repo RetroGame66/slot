@@ -37,6 +37,18 @@ fn select_chords_map_to_all_four_axes() {
 }
 
 #[test]
+fn select_and_volume_keys_switch_the_audio_profile() {
+    for (btn, want) in [
+        (Btn::VolUp, AudioProfileNext),
+        (Btn::VolDown, AudioProfilePrev),
+    ] {
+        let mut g = Gestures::new();
+        g.feed(RawEvent::Down(Select), 0);
+        assert_eq!(g.feed(RawEvent::Down(btn), 10), vec![want]);
+    }
+}
+
+#[test]
 fn select_released_inside_the_window_still_reaches_the_game() {
     let mut g = Gestures::new();
     g.feed(Down(Select), 0);

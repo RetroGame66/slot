@@ -22,6 +22,12 @@ pub struct Compositor {
     quad: Quad,
     game: GamePass,
     sprites: Sprites,
+    /// Last mask pushed, so a per-frame `set_panel_mask` uploads only when it actually changes.
+    applied_mask: Option<[[[u8; 3]; 3]; 3]>,
+    /// Last colour-correction matrix pushed, for the same reason.
+    applied_cc: Option<[[f32; 3]; 3]>,
+    /// Last colour-correction gamma pushed, for the same reason.
+    applied_cc_gamma: Option<f32>,
 }
 
 impl Compositor {
@@ -63,12 +69,50 @@ impl Compositor {
                 quad: Quad::new(),
                 game: GamePass::new()?,
                 sprites: Sprites::new()?,
+                applied_mask: None,
+                applied_cc: None,
+                applied_cc_gamma: None,
             })
         }
     }
 
     pub fn upload_game(&mut self, xrgb8888: &[u8]) {
         self.game.upload(xrgb8888);
+    }
+
+    /// The panel mask, as nine RGB triples in row-major order. See `GamePass::set_mask` for
+    /// why it is a table rather than a shader, and why it is three by three.
+    pub fn set_panel_mask(&mut self, rgb: &[[[u8; 3]; 3]; 3]) {
+        if self.applied_mask.as_ref() == Some(rgb) {
+            return;
+        }
+        let mut rgba = [255u8; 3 * 3 * 4];
+        for (texel, cell) in rgba.chunks_exact_mut(4).zip(rgb.iter().flatten()) {
+            texel[..3].copy_from_slice(cell);
+        }
+        self.game.set_mask(&rgba);
+        self.applied_mask = Some(*rgb);
+    }
+
+    /// The colour-correction matrix for the game pass, row-major (output row, input column).
+    /// Identity when correction is off; a colour-saturation-style table when on. Cached so cycling
+    /// the preset uploads the new matrix exactly once.
+    pub fn set_color_correction(&mut self, m: &[[f32; 3]; 3]) {
+        if self.applied_cc.as_ref() == Some(m) {
+            return;
+        }
+        self.game.set_color_correction(m);
+        self.applied_cc = Some(*m);
+    }
+
+    /// The gamma the colour correction runs in, pushed alongside the matrix every frame. 1.0
+    /// multiplies in the encoded space; 2.2 does the correction in linear.
+    pub fn set_cc_gamma(&mut self, g: f32) {
+        if self.applied_cc_gamma == Some(g) {
+            return;
+        }
+        self.game.set_cc_gamma(g);
+        self.applied_cc_gamma = Some(g);
     }
 
     pub fn draw_game(&mut self) {
@@ -105,6 +149,12 @@ impl Compositor {
 
     pub fn create_texture_nearest(&mut self, w: u32, h: u32, rgba: &[u8]) -> TexId {
         self.sprites.create_texture_nearest(w, h, rgba)
+    }
+
+    /// Frees one texture and leaves its slot empty, for a face the shelf has scrolled away
+    /// from. See `SpritePool::release_texture` for why the pool is allowed to be full of holes.
+    pub fn release_texture(&mut self, id: TexId) {
+        self.sprites.release_texture(id);
     }
 
     pub fn update_texture(&mut self, id: TexId, w: u32, h: u32, rgba: &[u8]) {

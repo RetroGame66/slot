@@ -28,6 +28,10 @@ impl std::error::Error for AudioError {}
 pub trait AudioSink: Send {
     /// The rate is a preference. A device that will not take it opens at its own, which the
     /// ring then reports and the resampler converts to.
-    fn open(&mut self, sample_rate: u32) -> Result<(), AudioError>;
+    ///
+    /// The profile decides what the device is asked to buffer. It is a parameter rather than a
+    /// property of the sink because it can only be changed by reopening the hardware, and the
+    /// caller is the one that knows whether anything is playing.
+    fn open(&mut self, sample_rate: u32, profile: super::Profile) -> Result<(), AudioError>;
     fn ring(&self) -> Arc<Ring>;
 }

@@ -97,4 +97,12 @@ pub trait RetroCore: Send {
     /// never offered one simply has nothing to hear this through, and the default does
     /// nothing.
     fn stop_link(&mut self) {}
+    /// Apply a cheat code to the core. A no-op for cores or builds without cheat support — the
+    /// only crate that ever overrides this is `LibretroCore`, and only for a core that actually
+    /// exports `retro_cheat_set`. Called from the emulator thread only, like every other core
+    /// entry point.
+    fn set_cheat(&self, _index: u32, _enabled: bool, _code: &str) {}
+    /// Clear the core's cheat list. No-op for cores/builds without cheat support. Called from the
+    /// emulator thread only.
+    fn cheat_reset(&self) {}
 }

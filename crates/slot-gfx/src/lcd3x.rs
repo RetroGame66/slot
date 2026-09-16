@@ -34,3 +34,18 @@ pub fn mask_texture_rgba8() -> [u8; 3 * 3 * 4] {
     }
     tex
 }
+
+/// The built-in table as the `[[[u8; 3]; 3]; 3]` the rest of the tree passes around, so the
+/// card's mask and the shipped one share one type and the app can fall back to it.
+pub fn builtin_panel_mask() -> [[[u8; 3]; 3]; 3] {
+    let m = lcd3x_mask();
+    let mut out = [[[0u8; 3]; 3]; 3];
+    for (row, mrow) in out.iter_mut().zip(m.iter()) {
+        for (cell, mcell) in row.iter_mut().zip(mrow.iter()) {
+            for (o, v) in cell.iter_mut().zip(mcell.iter()) {
+                *o = (v * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    out
+}

@@ -481,6 +481,27 @@ impl LibretroCore {
         self.host.save_dir.to_string_lossy().into_owned()
     }
 
+    /// Apply one cheat code to the core. `index` is the slot mGBA's libretro builds its list
+    /// from; successive indices stack. A code the core does not understand is simply ignored by
+    /// mGBA, which is the right failure mode on a device with no console. No-op when the core
+    /// never exported `retro_cheat_set`. Called from the emulator thread only.
+    pub fn apply_cheat(&self, index: u32, enabled: bool, code: &str) {
+        let Some(f) = self.api.set_cheat else {
+            return;
+        };
+        let Ok(c) = CString::new(code) else {
+            return;
+        };
+        unsafe { f(index, enabled, c.as_ptr()) };
+    }
+
+    /// Clear the core's cheat list, if the core exports `retro_cheat_reset`.
+    pub fn reset_cheats(&self) {
+        if let Some(f) = self.api.cheat_reset {
+            unsafe { f() };
+        }
+    }
+
     /// Whether the core took the rumble interface, which it asks for once at init.
     pub fn asked_for_rumble(&self) -> bool {
         self.host.asked_for_rumble
@@ -719,6 +740,14 @@ impl RetroCore for LibretroCore {
     fn stop_link(&mut self) {
         let _a = Active::bind(&mut self.host);
         unsafe { halt_link() };
+    }
+
+    fn set_cheat(&self, index: u32, enabled: bool, code: &str) {
+        self.apply_cheat(index, enabled, code);
+    }
+
+    fn cheat_reset(&self) {
+        self.reset_cheats();
     }
 }
 

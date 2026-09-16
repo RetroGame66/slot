@@ -32,9 +32,17 @@ pub fn run() {
             return;
         }
     };
+    // The card's panel mask, if it has one, and before the first frame is drawn. Same shape as
+    // the typeface: a setting the card owns, read once, and a failure that leaves the built-in
+    // table in place rather than taking the picture away.
+    if let Some(mask) = slot::root::panel_mask(&root) {
+        compositor.set_panel_mask(&mask);
+    }
     let platform = DevicePlatform::new(root.clone());
     eprintln!("slot: {}", platform.report());
     platform.trace_boot();
+    // The card's panel mask (and colour correction) is now owned by the app and pushed to the
+    // compositor every frame from `frontend.render`, so it is not set here.
     let mut frontend = Frontend::boot(Box::new(platform));
     frontend.upload_faces(&mut compositor);
     let mut input = DeviceInput::open(&root);

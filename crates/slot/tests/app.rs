@@ -8,9 +8,9 @@ use slot::session::Session;
 use slot_input::{Action, Btn, RawEvent};
 use slot_store::{write_slot_state, Cart, Core, SlotState};
 use slot_ui::{
-    board_at, grown, lid_at, on_board, opening, shelf_cart, Draw, Placed, TexId, BOARD_W, CART_W,
-    CHIP_H, CHIP_U, CHIP_V, CHIP_W, HINT_EDGE, HINT_H, LID_TURN, SLIDE_UP, SOCKET_H, SOCKET_U,
-    SOCKET_V, SOCKET_W, TURN_PAD,
+    board_at, grown, lid_at, on_board, opening, shelf_cart, Draw, Placed, TexId, BOARD_W, CART_H,
+    CART_W, CENTER_SCALE, CHIP_H, CHIP_U, CHIP_V, CHIP_W, HINT_EDGE, HINT_H, LID_TURN, SLIDE_UP,
+    SOCKET_H, SOCKET_U, SOCKET_V, SOCKET_W, TURN_PAD,
 };
 
 /// A tap of A, which is what plays a cart. The press alone is not enough: held, it means
@@ -25,6 +25,7 @@ fn app_with_carts(stems: &[&str]) -> App {
         stems
             .iter()
             .map(|stem| Cart {
+                initial: slot_store::initial(&slot_store::clean_label(stem)),
                 stem: (*stem).to_string(),
                 rom: format!("Games/{stem}.gba").into(),
                 label: None,
@@ -330,8 +331,12 @@ fn a_cart_in_flight_is_not_also_left_standing_on_the_shelf() {
     let carts = out
         .iter()
         .filter(|d| match **d {
-            Draw::Rect { w, .. } | Draw::Tex { w, .. } | Draw::Turned { w, .. } => {
-                (w - CART_W as f32).abs() < 0.01
+            // Any cart, at whatever size the travel has it: the row draws its selection larger
+            // than the rest and the seating walks that back down to the cart's own size.
+            Draw::Rect { w, h, .. } | Draw::Tex { w, h, .. } | Draw::Turned { w, h, .. } => {
+                w >= CART_W as f32 - 0.01
+                    && w <= CART_W as f32 * CENTER_SCALE + 0.01
+                    && (w / h - CART_W as f32 / CART_H as f32).abs() < 0.01
             }
             Draw::Game | Draw::Shot { .. } => false,
         })
@@ -972,11 +977,18 @@ fn assert_parts_on_board(out: &[Draw], f: &PickerFaces, board: Placed, when: &st
 
 /// Quads a shelf cart's width other than the open cart's board: the highlighted cart standing in
 /// the row. Its neighbours are drawn smaller.
+/// How many carts the row is standing up.
+///
+/// The row draws its selection larger than the rest (`CENTER_SCALE`), and the neighbouring
+/// carts keep their own size — so `CART_W` is what a *side* cart measures, and the width these
+/// ask about is the hero's. Counting `CART_W` here would have answered a different question
+/// once the row stopped shrinking its neighbours.
 fn carts_standing(out: &[Draw], board: TexId) -> usize {
+    let hero = CART_W as f32 * CENTER_SCALE;
     out.iter()
         .filter(|d| match **d {
-            Draw::Rect { w, .. } => (w - CART_W as f32).abs() < 0.01,
-            Draw::Tex { w, tex, .. } => tex != board && (w - CART_W as f32).abs() < 0.01,
+            Draw::Rect { w, .. } => (w - hero).abs() < 0.01,
+            Draw::Tex { w, tex, .. } => tex != board && (w - hero).abs() < 0.01,
             _ => false,
         })
         .count()
@@ -1154,7 +1166,7 @@ fn the_sockets_and_the_seated_chip_rest_on_whole_pixels() {
 #[test]
 fn the_neighbours_dim_to_a_quarter_while_a_cart_is_open() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
-    let faces = vec![TexId::from_raw(920), TexId::from_raw(921)];
+    let faces = vec![Some(TexId::from_raw(920)), Some(TexId::from_raw(921))];
     app.set_faces(faces.clone());
     fake_picker_faces(&mut app);
     app.apply(Action::GbaDown(Btn::Start));
@@ -1217,14 +1229,9 @@ fn the_highlighted_cart_becomes_the_lid_rather_than_a_second_cart() {
     app.apply(Action::GbaDown(Btn::Start));
     let out = frame(&app);
 
-    let standing = out
-        .iter()
-        .filter(|d| match **d {
-            Draw::Rect { w, .. } => (w - CART_W as f32).abs() < 0.01,
-            Draw::Tex { w, tex, .. } if tex != f.board => (w - CART_W as f32).abs() < 0.01,
-            _ => false,
-        })
-        .count();
+    // The row's own cart, by the width the row draws it at. A neighbour measures `CART_W` now
+    // that the sides keep their size, so counting that would answer for the wrong cart.
+    let standing = carts_standing(&out, f.board);
     assert_eq!(
         standing, 0,
         "the row still draws the cart whose lid is coming off"
@@ -1524,7 +1531,7 @@ fn the_open_starts_anyway_when_the_faces_never_come() {
 fn the_fallback_open_lifts_the_shelfs_own_face_for_the_lid() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
     let shelf_faces = [TexId::from_raw(950), TexId::from_raw(951)];
-    app.set_faces(shelf_faces.to_vec());
+    app.set_faces(shelf_faces.map(Some).to_vec());
     app.apply(Action::GbaDown(Btn::Start));
     app.update(1.501);
     let_it_open(&mut app);
@@ -1545,7 +1552,7 @@ fn the_fallback_open_lifts_the_shelfs_own_face_for_the_lid() {
 fn the_real_faces_replace_the_fallback_once_they_arrive() {
     let (_d, mut app) = on_shelf(&["Emerald", "Zzz"]);
     let shelf_faces = [TexId::from_raw(950), TexId::from_raw(951)];
-    app.set_faces(shelf_faces.to_vec());
+    app.set_faces(shelf_faces.map(Some).to_vec());
     app.apply(Action::GbaDown(Btn::Start));
     app.update(1.501);
     let_it_open(&mut app);

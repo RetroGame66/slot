@@ -5,13 +5,22 @@ use crate::cart::{label_colour, label_text, CART_H, CART_W};
 use crate::hud::Millis;
 use crate::slot_chrome::draw_empty_slot;
 
-/// Distance between cart centres. Wider than a cart so the neighbours peek in at both
-/// edges and the row reads as continuing past them.
-/// Chosen so the outer two carts sit fully on screen with the margin at the edge equal to
-/// the gap beside the centre cart. At 286 the side carts were clipped 24px off each edge.
-const PITCH: f32 = 240.0;
-const SIDE_SCALE: f32 = 0.78;
-const SIDE_ALPHA: f32 = 0.55;
+/// Distance between cart centres. Wide enough that the side carts sit half off-screen, so the
+/// row reads as continuing past them rather than as three equal carts side by side.
+const PITCH: f32 = 360.0;
+/// The centre cart is drawn larger than the row so it reads as the one in hand; the
+/// neighbours keep their full size but are pushed to the edges (see PITCH). 1.5 makes the
+/// selection clearly the hero without dwarfing the neighbours off screen.
+///
+/// Public because it is not the shelf's business alone: the app scales the cart into the slot
+/// from this size, and a cart drawn at rest is a `CENTER_SCALE` cart to anything looking for
+/// one.
+pub const CENTER_SCALE: f32 = 1.5;
+pub const SIDE_SCALE: f32 = 1.0;
+/// How much of its face a side cart keeps at full recede. Public for the same reason as
+/// `CENTER_SCALE`: the app derives how much further to dim the neighbours from it, and that
+/// arithmetic has to follow this number rather than be written down against an old one.
+pub const SIDE_ALPHA: f32 = 0.7;
 /// Carts stand on the row rather than float: the foot stays put as a cart shrinks away.
 pub(crate) const FOOT_Y: f32 = (OUT_H + CART_H) as f32 / 2.0;
 /// Critically damped, so a flick lands on a cart instead of bouncing past and returning.
@@ -34,7 +43,11 @@ pub struct Shelf {
     pub carts: Vec<Cart>,
     pub index: usize,
     pub scroll: f32,
-    faces: Vec<TexId>,
+    /// One slot per cart, `None` until its face has been rasterised and uploaded. The
+    /// shelf is born showing placeholders and fills in behind the caret: rasterising every
+    /// cart up front costs about 70 ms each on this hardware, which is seven seconds on a
+    /// hundred-game card spent before the first frame.
+    faces: Vec<Option<TexId>>,
     /// The cart silhouette in black, drawn under a dimmed cart. One texture for the whole
     /// row: every cart is the same shape.
     shadow: Option<TexId>,
@@ -63,14 +76,63 @@ impl Shelf {
         self.shadow = Some(face);
     }
 
-    pub fn set_faces(&mut self, faces: Vec<TexId>) {
+    pub fn set_faces(&mut self, faces: Vec<Option<TexId>>) {
         self.faces = faces;
+    }
+
+    /// The texture a cart is holding, if its face has been built and not since released.
+    pub fn face_of(&self, i: usize) -> Option<TexId> {
+        self.faces.get(i).copied().flatten()
+    }
+
+    /// Drops one face back to its placeholder. The caller releases the texture; this only
+    /// forgets the handle, so the shelf stops pointing at something that is no longer there.
+    pub fn clear_face(&mut self, i: usize) {
+        if let Some(slot) = self.faces.get_mut(i) {
+            *slot = None;
+        }
+    }
+
+    /// One face, as it arrives. The list is grown to the cartridge count first, because the
+    /// background filler answers out of order and an index can land before its turn.
+    pub fn set_face(&mut self, i: usize, tex: Option<TexId>) {
+        if self.faces.len() < self.carts.len() {
+            self.faces.resize(self.carts.len(), None);
+        }
+        if let Some(slot) = self.faces.get_mut(i) {
+            *slot = tex;
+        }
     }
 
     /// In `hints` order.
     pub fn find(&self, stem: &str) -> Option<(&Cart, Option<TexId>)> {
         let i = self.carts.iter().position(|c| c.stem == stem)?;
-        Some((&self.carts[i], self.faces.get(i).copied()))
+        Some((&self.carts[i], self.faces.get(i).copied().flatten()))
+    }
+
+    /// Where the row is, in the continuous coordinate the spring lives in. The arrow keys are
+    /// the only thing that moves the selection one cart at a time; when something else moves
+    /// it — the letter ring, which can cross four hundred carts at once — the row is placed a
+    /// short way *short* of where it is going, so the spring's travel is the movement. That
+    /// lands a long jump as a flick through the last cart rather than as a blur through all of
+    /// them, which is many seconds of unwatchable row.
+    ///
+    /// Called after `index` has been set, since it is `index` it is measured back from.
+    ///
+    /// A card with no more carts than the row has slots gets no setback at all, however small:
+    /// the row draws each of its carts once, so on those cards shifting them by even one place
+    /// moves the cart that covers the left edge out of the range the row draws, and a strip of
+    /// bare backdrop shows down the side for the length of the slide. Those cards simply appear
+    /// on the new cart, which costs them nothing: nobody needs a dial to find a game in six.
+    pub fn seat_short_of(&mut self, short: f32) {
+        let rows = SLOTS * 2 + 1;
+        let short = if self.carts.len() as i32 >= rows {
+            short
+        } else {
+            0.0
+        };
+        self.scroll = self.index as f32 - short;
+        self.vel = 0.0;
     }
 
     pub fn left(&mut self) {
@@ -213,7 +275,7 @@ impl Shelf {
             }
             let offset = target + slot as f32 - self.scroll;
             let t = offset.abs().min(1.0);
-            let scale = 1.0 + (SIDE_SCALE - 1.0) * t;
+            let scale = CENTER_SCALE + (SIDE_SCALE - CENTER_SCALE) * t;
             let alpha = (1.0 + (SIDE_ALPHA - 1.0) * t) * (1.0 - recede);
             let (w, h) = (CART_W as f32 * scale, CART_H as f32 * scale);
             // Away from the middle, and further the further out it already was, so the row
@@ -239,13 +301,13 @@ impl Shelf {
                     });
                 }
             }
-            out.push(match self.faces.get(i) {
+            out.push(match self.faces.get(i).copied().flatten() {
                 Some(tex) => Draw::Tex {
                     x,
                     y,
                     w,
                     h,
-                    tex: *tex,
+                    tex,
                     alpha: alpha * dim,
                 },
                 // A cart whose face has not been uploaded still holds its place. A gap in

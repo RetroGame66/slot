@@ -12,6 +12,7 @@ fn render_board() {
         return;
     };
     let face = board_face(&Cart {
+        initial: 'P',
         stem: "Pokemon - Emerald Version (USA, Europe)".into(),
         rom: "Games/Emerald.gba".into(),
         label: None,

@@ -2,7 +2,10 @@ use std::path::{Path, PathBuf};
 
 use crate::atomic::atomic_write;
 
-pub const BRIGHTNESS_MAX: u8 = 9;
+/// Twenty steps, and so nineteen of them lit: step 0 is the panel off, which is what the lid
+/// closes with. Ten was too coarse at the bottom — step 1 sat well above what a dark room
+/// wants, with nothing between it and black — so the ramp is finer rather than the top higher.
+pub const BRIGHTNESS_MAX: u8 = 19;
 pub const BLUE_LIGHT_MAX: u8 = 9;
 pub const VOLUME_MAX: u8 = 100;
 
@@ -31,12 +34,15 @@ pub struct SlotState {
 }
 
 /// Not derived. `read_slot_state` falls back here on a first boot, and all zeroes would
-/// be a device with the backlight off and the mixer muted.
+/// be a device with the backlight off and the mixer muted. The brightness default is the
+/// middle of the ramp about to be written, not five of it: on a twenty step scale the old
+/// five would come up at a quarter, and a card that has never been touched should look like
+/// a card someone set at a sensible level.
 impl Default for SlotState {
     fn default() -> Self {
         SlotState {
             cart: None,
-            brightness: 5,
+            brightness: 10,
             blue_light: 0,
             volume: 60,
             muted: false,

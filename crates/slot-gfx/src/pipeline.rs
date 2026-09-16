@@ -10,12 +10,17 @@ pub const SCALE: u32 = 3;
 pub const SRC_W: u32 = OUT_W / SCALE;
 pub const SRC_H: u32 = OUT_H / SCALE;
 
+/// Column-major identity for the colour-correction matrix, uploaded when correction is off.
+const IDENTITY_CC: [f32; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+
 pub struct GamePass {
     prog: gl::types::GLuint,
     game: gl::types::GLuint,
     mask: gl::types::GLuint,
     u_rect: gl::types::GLint,
     u_bright: gl::types::GLint,
+    u_cc: gl::types::GLint,
+    u_cc_gamma: gl::types::GLint,
     /// A compositor with nobody driving it is a screen that is on.
     power: f32,
 }
@@ -32,7 +37,7 @@ impl GamePass {
             gl::RGBA,
             Some(&mask_texture_rgba8()),
         );
-        let (u_rect, u_bright);
+        let (u_rect, u_bright, u_cc, u_cc_gamma);
         unsafe {
             // The other two are fixed for the life of the program: the mask always tiles once
             // per source pixel and the target is always the offscreen frame.
@@ -51,6 +56,13 @@ impl GamePass {
             );
             u_rect = crate::gl::uniform_location(prog, "u_rect");
             u_bright = crate::gl::uniform_location(prog, "u_bright");
+            u_cc = crate::gl::uniform_location(prog, "u_cc");
+            u_cc_gamma = crate::gl::uniform_location(prog, "u_cc_gamma");
+            // 1.0 multiplies in the encoded space, which is what the picture did before this
+            // uniform existed. The app pushes the real value every frame.
+            gl::Uniform1f(u_cc_gamma, 1.0);
+            // Identity until a colour correction is chosen; the compositor uploads the real one.
+            gl::UniformMatrix3fv(u_cc, 1, gl::FALSE, IDENTITY_CC.as_ptr());
         }
         Ok(GamePass {
             prog,
@@ -58,12 +70,66 @@ impl GamePass {
             mask,
             u_rect,
             u_bright,
+            u_cc,
+            u_cc_gamma,
             power: 1.0,
         })
     }
 
     pub fn set_power(&mut self, t: f32) {
         self.power = t.clamp(0.0, 1.0);
+    }
+
+    /// Replace the table the picture is multiplied by. This is the whole of what this device
+    /// has for a shader: LCD3x collapses to a 3x3 mask because 240x160 lands exactly three
+    /// times in 720x480, and it is sampled once per source pixel. Handing the card its own
+    /// table is what lets the panel look like something other than the one table that ships.
+    ///
+    /// Three by three and nothing else. The mask tiles once per source pixel, so a table of
+    /// another shape would be sampled at three points out of its own grid and alias into
+    /// noise instead of resolving into a pattern.
+    pub fn set_mask(&self, rgba: &[u8]) {
+        if rgba.len() < (3 * 3 * 4) as usize {
+            return;
+        }
+        unsafe {
+            gl::BindTexture(gl::TEXTURE_2D, self.mask);
+            gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+            gl::TexSubImage2D(
+                gl::TEXTURE_2D,
+                0,
+                0,
+                0,
+                3,
+                3,
+                gl::RGBA,
+                gl::UNSIGNED_BYTE,
+                rgba.as_ptr() as *const std::ffi::c_void,
+            );
+        }
+    }
+
+    /// Replace the colour-correction matrix. Row-major in, uploaded column-major to match
+    /// GLSL's `mat3 * vec3`. Identity leaves the picture as the mask alone would leave it.
+    pub fn set_color_correction(&self, m: &[[f32; 3]; 3]) {
+        let col = [
+            m[0][0], m[1][0], m[2][0], m[0][1], m[1][1], m[2][1], m[0][2], m[1][2], m[2][2],
+        ];
+        unsafe {
+            gl::UseProgram(self.prog);
+            gl::UniformMatrix3fv(self.u_cc, 1, gl::FALSE, col.as_ptr());
+        }
+    }
+
+    /// The gamma the colour correction runs in. 1.0 multiplies in the encoded space, which is
+    /// what the picture did before this existed; above it the correction is done in linear,
+    /// where a half-colour stops darkening and a monochrome backlight keeps its body. Pushed
+    /// with the matrix by `Fbo::set_cc_gamma`.
+    pub fn set_cc_gamma(&self, g: f32) {
+        unsafe {
+            gl::UseProgram(self.prog);
+            gl::Uniform1f(self.u_cc_gamma, g.max(0.01));
+        }
     }
 
     pub fn upload(&mut self, xrgb8888: &[u8]) {

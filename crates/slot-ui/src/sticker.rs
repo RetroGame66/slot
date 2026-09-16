@@ -70,7 +70,7 @@ pub struct StickerFields<'a> {
 ///
 /// This is what README.md credits, in the space a label has for it.
 pub const CREDITS: [&str; 10] = [
-    "EMULATION POWERED BY MGA",
+    "EMULATION POWERED BY MGBA",
     "AND GPSP. AGS-102 IS A FORK OF",
     "BASEOS BY PVAIBHAV. TYPE IS",
     "OPEN SANS AND NERD FONTS",
@@ -130,7 +130,8 @@ struct Canvas {
 impl Canvas {
     /// The traced outline, rasterised. Everything else is set on top of it.
     fn shape(w: u32, h: u32) -> Canvas {
-        let px = render_svg(STICKER_SVG, w, h).unwrap_or_else(|| vec![0; (w * h * 4) as usize]);
+        let svg = STICKER_SVG;
+        let px = render_svg(svg, w, h).unwrap_or_else(|| vec![0; (w * h * 4) as usize]);
         Canvas { px, w, h }
     }
 
@@ -391,10 +392,11 @@ pub fn sticker_face(f: &StickerFields) -> UndoFace {
 /// The lockup at a given width, and the size it came back. `None` where the artwork will not
 /// parse, which draws no logo rather than no label.
 fn wordmark(w: u32) -> Option<(Vec<u8>, (u32, u32))> {
-    let tree = usvg::Tree::from_str(WORDMARK_SVG, &usvg::Options::default()).ok()?;
+    let svg = WORDMARK_SVG;
+    let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).ok()?;
     let size = tree.size();
     let h = (w as f32 * size.height() / size.width()).round() as u32;
-    Some((render_svg(WORDMARK_SVG, w, h)?, (w, h)))
+    Some((render_svg(svg, w, h)?, (w, h)))
 }
 
 /// Centred on screen, at its own size. The label is an object being looked at rather than a

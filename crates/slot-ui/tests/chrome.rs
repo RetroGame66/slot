@@ -1,11 +1,12 @@
 use slot_store::Cart;
 use slot_ui::{
-    draw_empty_slot, edge, housing, icon_box, opening, recess, Draw, Shelf, SlotChrome, ALERT_PX,
-    CART_H, CART_W, LABEL_H, LABEL_Y, MOUTH_H, OUT_H, OUT_W,
+    draw_empty_slot, edge, housing, icon_box, label_panel, opening, recess, Draw, Shelf,
+    SlotChrome, ALERT_PX, CART_H, CART_W, CENTER_SCALE, MOUTH_H, OUT_H, OUT_W,
 };
 
 fn cart() -> Cart {
     Cart {
+        initial: slot_store::initial(&slot_store::clean_label("Emerald")),
         stem: "Emerald".into(),
         rom: "Games/Emerald.gba".into(),
         label: None,
@@ -37,8 +38,15 @@ fn quad(d: &Draw) -> Quad {
     }
 }
 
+/// The cart's own quad, at whatever size the seating travel has it. The row draws a cart
+/// larger than its own size and the travel walks that back to `CART_W` on the way in, so
+/// matching one width would find nothing for most of the animation. Told apart from the slot's
+/// bands by its shape, which is the cart's and none of theirs.
 fn is_cart(d: &Draw) -> bool {
-    (quad(d).w - CART_W as f32).abs() < 0.01
+    let (w, h) = (quad(d).w, quad(d).h);
+    w >= CART_W as f32 - 0.01
+        && w <= CART_W as f32 * CENTER_SCALE + 0.01
+        && (w / h - CART_W as f32 / CART_H as f32).abs() < 0.01
 }
 
 fn is_game_layer(d: &Draw) -> bool {
@@ -276,11 +284,16 @@ fn a_seated_cart_shows_a_sliver_of_label_and_nothing_readable() {
             q.y + q.h
         })
         .fold(0.0, f32::max);
-    let peek = deepest - (cart.y + LABEL_Y as f32);
+    // The label's place in the cart's own on-screen frame. The face is rasterised at FACE_SCALE
+    // and drawn down to `CART_W`, so the inset the eye sees is the logical one — measuring
+    // against the sheet's own inset would put the label off the bottom of the cart entirely.
+    let (_, label_y, _, label_bottom) = label_panel(CART_W, CART_H);
+    let label_h = label_bottom - label_y;
+    let peek = deepest - (cart.y + label_y as f32);
     assert!(peek > 0.0, "no label shows at all: the slot reads as empty");
     assert!(
-        peek < LABEL_H as f32 / 4.0,
-        "{peek}px of a {LABEL_H}px label is out of the machine"
+        peek < label_h as f32 / 4.0,
+        "{peek}px of a {label_h}px label is out of the machine"
     );
 }
 

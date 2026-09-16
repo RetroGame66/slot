@@ -69,9 +69,24 @@ uniform sampler2D u_game;
 uniform sampler2D u_mask;
 uniform vec2 u_src;
 uniform float u_bright;
+uniform mat3 u_cc;
+// The gamma the colour correction runs in. 1.0 multiplies straight in the encoded space, as the
+// picture did before this uniform existed: the two pow() calls are then inverses of one another
+// and cancel. 2.2 converts to linear, multiplies, and converts back.
+//
+// Saturation and a monochrome backlight mapping have to be done in linear or they come out flat,
+// which is what RetroArch's handheld shaders (nds-color, lcd1x_nds) do. Multiplying the encoded
+// value instead darkens a half-colour and washes a monochrome backlight out.
+uniform float u_cc_gamma;
 varying vec2 v_uv;
 void main() {
-    vec3 rgb = texture2D(u_game, v_uv).rgb * texture2D(u_mask, v_uv * u_src).rgb;
+    vec3 c = texture2D(u_game, v_uv).rgb;
+    c = pow(c, vec3(u_cc_gamma));
+    c = u_cc * c;
+    c = pow(max(c, vec3(0.0)), vec3(1.0 / u_cc_gamma));
+    // The panel mask still multiplies in the encoded space. Either order gives the same picture:
+    // both are multiplications, and multiplications commute.
+    vec3 rgb = c * texture2D(u_mask, v_uv * u_src).rgb;
     FRAG_COLOR = vec4(rgb * u_bright, 1.0);
 }
 "#;

@@ -8,6 +8,7 @@ use slot_store::{Cart, Core, StateRing};
 /// No content root, so nothing this app does can reach a ring.
 fn app_playing(stem: &str) -> App {
     let mut a = App::new(vec![Cart {
+        initial: slot_store::initial(&slot_store::clean_label(stem)),
         stem: stem.to_string(),
         rom: format!("Games/{stem}.gba").into(),
         label: None,
