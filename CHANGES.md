@@ -41,6 +41,10 @@ character. `宝可梦` files under `B`.
 | `slot-store/src/lib.rs`, `slot-ui/src/lib.rs` | The rule that turns a file name into a title lives in the store, because the ring's letter is decided from it and a scan cannot ask the ui. |
 | `slot/src/app.rs`, `frontend.rs` | Ring input; the shelf's own line of type, rebuilt only when the cart under the eye changes. |
 
+The readings in the table come from [pypinyin](https://github.com/mozillazg/python-pinyin) (MIT),
+which is what `tools/gen_pinyin.py` imports to generate it; the table is a derived work of that
+project's data, and `README.md` credits it as such.
+
 Two decisions worth naming:
 
 - **Digits do not get a bucket.** `1080 Snowboarding` files under `#`. A facet on the ring is a
@@ -64,17 +68,44 @@ nobody is looking at.
 | `slot-ui/src/cart.rs` | Per-phase timing inside `cart_face` (`shell 12.3 label 4.5 …`), because the device has no profiler and no console and a `boot.log` is where the numbers can exist. |
 | `slot-ui/examples/face_timing.rs` | **New.** Times each builder individually, on the device. |
 
-## 4. Colour correction in linear space
+## 4. Panel-mask presets, and a colour-correction stage
 
-The display filter's two knobs (panel mask, colour correction) were already there; what changed
-is **where** the colour maths happens.
+Neither existed upstream. The picture was multiplied by one fixed LCD3x table — always, with no
+way to turn it down — and there was no colour correction of any kind.
+
+**The panel mask** becomes five presets, cycled on `SELECT`+`X`: OFF / LCD3X 50% / LCD3X 100%
+(the default, and upstream's look) / SCANLINE 50% / SCANLINE 100%. The card can ship its own 3x3
+table in `System/mask.txt` in place of the built-in. `SCANLINE*` is a second table — the first row
+of each three-row cell dark, the other two lit — and the two 50% steps are either table lerped
+halfway toward an everywhere-white one, which is what lets `OFF` be a clean framebuffer rather
+than a special case in the shader.
+
+**The colour correction** is a 3x3 matrix in the game fragment shader, cycled on `SELECT`+`Y`
+through seven presets: FULLCOLOR (identity), HALFCOLOR (50% saturation), NOCOLOR (luma only, with
+the matrix overridable per card through `System/cc.txt`) and four tinted-backlight palettes.
+
+Both modes persist to `System/display.txt` as two integers, written the moment either changes.
 
 | File | Change |
 |---|---|
-| `slot-gfx/src/shaders.rs` | `u_cc_gamma` added to the game fragment shader. `1.0` multiplies straight in the encoded space, as the picture did before — the two `pow()` calls are then inverses and cancel. `2.2` converts to linear, multiplies, and converts back. |
-| `slot-gfx/src/pipeline.rs`, `fbo.rs` | The gamma is pushed with the matrix, cached so a change uploads exactly once. |
-| `slot/src/app.rs` | `CC_GAMMA = 2.2`. HALFCOLOR (1) and the four tinted backlights (3..=6) use it; FULLCOLOR (0) and NOCOLOR (2) are pushed at 1.0 and stay **bit-identical** to before. |
-| `slot-gfx/src/lcd3x.rs` | The built-in 3x3 mask exposed as the same type the card's own table uses, so the app can fall back to it. |
+| `slot/src/app.rs` | `DisplayFilter` — the five masks (built-in, lerped, scanline), the seven matrices, `applied_mask()` / `applied_cc()`, and the two `cycle_*` that write `display.txt`. |
+| `slot-gfx/src/shaders.rs` | `u_cc` (mat3) and `u_cc_gamma` added to the game fragment shader. |
+| `slot-gfx/src/pipeline.rs`, `fbo.rs` | Both pushed with the matrix, cached so a change uploads exactly once. |
+| `slot-gfx/src/lcd3x.rs` | The built-in 3x3 table exposed as the same type the card's own table uses, so the card's and the shipped one are interchangeable. |
+| `slot-input/src/gesture.rs` | `MaskCycle` and `ColorCycle` as chord actions. |
+| `slot/src/root.rs` | `mask.txt`, `cc.txt`, and the read/write pair for `display.txt`. |
+
+**The colour maths runs in linear.** `u_cc_gamma` is either `1.0` or `2.2`. At `1.0` the matrix
+multiplies straight in the encoded space and the two `pow()` calls the shader gained are inverses
+of one another, so they cancel — which is precisely what the game pass did before this existed, and
+is why FULLCOLOR and NOCOLOR behave as they always did. At `2.2` (sRGB) the matrix multiplies in
+linear, which is where saturation and a tint mapping have to live or they come out flat.
+`CC_GAMMA = 2.2` is what HALFCOLOR and the four tinted backlights use; the card's `cc.txt` override
+of the NOCOLOR matrix keeps its meaning because that mode still runs at `1.0`.
+
+The panel mask keeps multiplying in the encoded space, after the correction. Both are
+multiplications, so the order does not matter — the comment in the shader says so, because it looks
+like it should.
 
 **Expected:** a half-colour stops going darker, and a monochrome backlight keeps its body
 instead of being washed out. Saturation and a tint mapping have to be done in linear or they
@@ -174,14 +205,16 @@ beside the tree.
 
 ## 12. Fork notice, attribution, and the line-ending policy
 
-Seven files that are not code, added or changed so the tree can stand on its own as a public
-fork of an MIT project.
+Eight files that are not code, added or changed so the tree can stand on its own as a public fork
+of an MIT project. Counting them, the repository commit is **82 files**; the 75 above are the
+source change set on its own.
 
 | File | Change |
 |---|---|
 | `NOTICE.md` | **New.** States that this is a modified fork, names the upstream author and the baseline commit, credits the modifications, lists which bundled parts keep their own licences, and disclaims affiliation. |
+| `README.upstream.md` | **New.** Upstream's README, reproduced unmodified and introduced as such. Its place is here rather than at the tail of `README.md`, where it would have made the fork's front page speak in the upstream author's first person about a release this fork does not ship. |
+| `README.md` | The bilingual banner at the top, and an **About this fork** front page: what the fork adds, what it changes, the controls including the four chords it adds, what goes on the card, and where a binary comes from. |
 | `LICENSE` | A second copyright line for the modifications, added beneath the original one. The upstream notice itself is untouched. |
-| `README.md` | A short bilingual banner at the top: modified fork, not the upstream project, with links to `NOTICE.md` and `CHANGES.md`. |
 | `CHANGES.md` | **New in the tree** — it already existed at the root of this package. Copying it in keeps the repository self-contained, since `NOTICE.md` links to it. |
 | `.gitattributes` | **New.** `* text=auto eol=lf`, plus an explicit `binary` for the asset types. Without it, a Windows checkout with `core.autocrlf=true` rewrites every file it touches, and every diff comes back as a whole-file change. |
 | `.gitignore` | `/deploy/`, `/toolchain/`, `/参考/`, `/rustup-init.exe` appended. A vendored build environment and a built card tree must never reach the repository. |
@@ -202,7 +235,15 @@ what `licenses/` is there for.
 - **Line endings are LF**, matching upstream.
 - **`deploy/`, `toolchain/`, and the card's art** (covers, labels, roms) are not part of this
   package — it is the source change only.
-- **The README's control table was corrected.** It listed `SELECT`+`X` as opening a chooser;
-  the code (`Action::MaskCycle` → `cycle_mask()` → `(mode + 1) % 5`) cycles the preset. The
-  other three chords the change added (`Y`, `A`, `VOL±`) were missing and are now listed, along
-  with the files the change added under `System/`.
+- **The README's control tables were rebuilt, not corrected.** Upstream's listed six `SELECT`
+  chords because six was all there was; the four this change adds (`X` is `MaskCycle`, `Y` is
+  `ColorCycle`, `A` is `CheatToggle`, `VOL±` step the audio profile) are new chords, not
+  newly-documented ones. The carousel row was relabelled as well: upstream's table says `L` / `R`,
+  which are the shoulder buttons, and those do nothing on the shelf on their own — what
+  `Shelf::hold_left` / `hold_right` answer is `Btn::Left` / `Btn::Right`, the D-pad.
+- **Upstream's README now lives at `README.upstream.md`.** It used to be the tail of `README.md`,
+  where a fork's front page ended up quoting the upstream author on his own release, his own
+  issue policy, and a `System/` bundle this fork does not publish.
+- **`README.md` is no longer a table of one-liners.** It carries an About this fork front page and
+  a Controls section in which the four new chords are described one at a time — the rings, where
+  each applies, what it persists, and what feedback it gives.

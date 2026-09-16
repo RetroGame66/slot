@@ -11,6 +11,9 @@ voice — is the work of **Brandon T. Kowalski**. It is used here under the MIT 
 
 **Fork maintained by [@RetroGame66](https://github.com/RetroGame66).**
 
+The fork's own documentation is [`README.md`](README.md). Upstream's README is reproduced
+unmodified, and introduced as such, at [`README.upstream.md`](README.upstream.md).
+
 > **中文说明**
 >
 > 本仓库是 [BrandonKowalski/slot](https://github.com/BrandonKowalski/slot) 的修改版（fork）。
@@ -34,9 +37,10 @@ without carrying a permanent divergence.
 **75 files, +5,929 / −385** — eleven new files, 64 modified. The full list, by feature rather than by
 file, is in [`CHANGES.md`](CHANGES.md). In short, it adds: a Chinese interface whose typeface is
 read off the card rather than baked into the binary; a pinyin letter ring over the shelf; cart
-faces built off the frame loop with a bounded texture pool; colour correction moved into linear
-space; audio latency profiles; per-cart cheat codes with an on-device browser; a twenty-step
-backlight; button remapping; and GB/GBC cartridge artwork (assets only, not wired up).
+faces built off the frame loop with a bounded texture pool; selectable panel-mask presets and a
+colour-correction stage, four new `SELECT` chords and all; a twenty-step backlight; audio latency
+profiles; per-cart cheat codes with an on-device browser; button remapping; and GB/GBC cartridge
+artwork (assets only, not wired up).
 
 ## Licensing of what is not ours
 
@@ -48,6 +52,7 @@ references are not, and keep their own terms:
 | `mgba_libretro` | MPL-2.0 | [`licenses/mgba-MPL-2.0.txt`](licenses/mgba-MPL-2.0.txt) |
 | `gpsp_libretro` | GPL-2.0 | [`licenses/gpsp-GPL-2.0.txt`](licenses/gpsp-GPL-2.0.txt) |
 | Bundled typefaces | SIL OFL 1.1 / MIT | the `.txt` files beside them in [`crates/slot-ui/assets/`](crates/slot-ui/assets) |
+| The pinyin readings in `crates/slot-store/src/pinyin.rs` | MIT | [pypinyin](https://github.com/mozillazg/python-pinyin) — the table is generated from that project's data by `tools/gen_pinyin.py` | |
 
 `slot` loads both emulator cores as libretro shared objects and never links against or modifies
 either — which is why neither licence reaches the frontend's own code. Upstream's own reasoning
