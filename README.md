@@ -22,7 +22,7 @@ the fork: what it adds, what it changes, and what the buttons actually do here.
 
 A modified build of `slot`, aimed at a Chinese GBA library living on one SD card.
 
-**82 files changed, +6,829 / −454** against upstream `4345cb8b` — 75 of them the change set proper
+**82 files changed, +6,895 / −453** against upstream `4345cb8b` — 75 of them the change set proper
 (11 new files, 64 modified) and 7 the fork's notice and repository housekeeping. The full account,
 feature by feature and file by file with the reasoning, is in [`CHANGES.md`](CHANGES.md).
 
@@ -328,7 +328,11 @@ Emerald = gpsp
 
 ## Installing
 
-The card layout is upstream's; what differs is where the binary comes from.
+The card layout is upstream's; what differs is where the binary comes from. The frontend goes in
+`System/` at the root of whichever card the device mounts as its content card — and which card that
+is depends on whether you use one or two, so it is worth deciding before you flash anything.
+
+### Two cards
 
 1. Write the latest [AGS-102](https://github.com/BrandonKowalski/AGS-102) `.img` release to an SD
    card, and insert it into **Slot 1** — the side with the volume buttons. That image is the
@@ -342,6 +346,69 @@ The card layout is upstream's; what differs is where the binary comes from.
 Both cards are ordinary FAT filesystems. Nothing is flashed onto the second one and nothing on it
 is write-protected, so a card laid out by hand and a card built by `task dist:device` are the same
 card. The companion toolbox below is the least tedious way to do that laying out.
+
+### One card
+
+AGS-102 supports a single card natively, so there is nothing to patch to get it. Its init script
+mounts the content card as **Slot 2's first partition if that partition exists and mounts, and
+otherwise this card's own data partition** — its own words, from `overlay/etc/init.d/rcS`:
+
+> Normal boot mounts the frontend/data card: TF2 p1 wins if usable, else this card's own
+> "primary" FAT partition (p7).
+
+Leave Slot 2 empty and that first branch never fires, so the OS falls through to its own card. That
+makes the procedure:
+
+1. Write `ags102.img` to the card, insert it into **Slot 1**, and leave **Slot 2 empty**.
+2. Power on and let the first boot finish. It paints `EXPANDING STORAGE` while it grows the data
+   partition to the card's full size and formats it. It then reports **`SLOT NOT FOUND`**, which is
+   expected rather than a fault: the card still holds no frontend. (AGS-102's own `INSTALL.md` says
+   `ADD FRONTEND TO SD CARD` at this point. That string belongs to BaseOS's NextUI session, which
+   AGS-102 replaced with its own — `SLOT NOT FOUND` is what this OS actually shows.)
+3. **Copy nothing onto the card before that first boot.** Step 2 *creates* the partition, so
+   anything placed there beforehand is erased by the format. Flash, boot, then copy, in that order.
+4. Power off by holding `POWER`, take the card out, and plug it into a computer. A volume labelled
+   **`BASEOS`** appears, sized to the whole card.
+5. Unzip `slot-frontend-System-*.zip` from the [releases](#downloads) into the **root of that
+   volume**. Its top level is `System/`, so `System/` lands at the root; put `Games/`, `Saves/`,
+   `BIOS/`, `Labels/` and `Wallpapers/` beside it. Building it yourself is described in *Building*.
+6. Put the card back into **Slot 1** and power on. `slot` starts.
+
+Two consequences of the arrangement are worth weighing before committing to it:
+
+- **The whole card is the content card.** On a 16 GB card roughly 14.5 GB is that volume, and the
+  frontend plus both cores take about 9 MB of it. There is no second volume to spill games into.
+- **Reflashing costs you the games.** AGS-102 publishes no `.bosupd` payloads, so moving to a new
+  version means reflashing the 1.4 GB image — and the first boot afterwards grows and reformats the
+  data partition again, taking `Games/`, `Saves/`, `States/` and `Labels/` with it. Copy those to a
+  computer first. That is a property of the partition layout rather than something AGS-102 or this
+  fork can route around, and it is the reason the two-card arrangement exists at all.
+
+The first boot also leaves a `README.txt` at the card root. It describes installing NextUI, which
+is not what this OS runs, so it can go.
+
+**Optional: keep the card's root clean by putting the frontend in the system image instead.** The
+session looks for the binary in two places, the card first (`overlay/usr/sbin/ags-session`):
+
+```
+/mnt/sdcard/System/slot     the card
+/usr/bin/slot               baked into the rootfs
+```
+
+`adb` is active by default over a data-capable USB-C cable, so with the card in the device:
+
+```
+adb push System/slot /usr/bin/slot
+adb push System/mgba_libretro.so /usr/bin/mgba_libretro.so
+adb shell chmod +x /usr/bin/slot
+adb shell sync && adb reboot
+```
+
+The two files share a directory because that is the second place `slot` looks for its cores
+(`crates/slot/src/core.rs`). `Games/`, `Saves/` and the rest stay on the card regardless, since the
+session sets the content root to the card either way. The rootfs is a 512 MiB slot with about
+100 MB used, so 9 MB is not a space question. What this buys is a clean card root and a fallback if
+the card's copy is ever lost — not immunity from a reflash, which overwrites the rootfs too.
 
 ## The companion toolbox
 

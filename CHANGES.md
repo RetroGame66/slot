@@ -2,9 +2,9 @@
 
 A diff against upstream **`4345cb8bdb`** (2026-09-11, *Merge branch 'feat/core-picker-board'*).
 
-**82 files changed, 6,829 insertions(+), 454 deletions(-)** across the branch — 15 added, 66
-modified, 1 deleted. **The change set proper is 75 of them: 11 added and 64 modified, at 6,294
-insertions and 453 deletions.** The other seven are this fork's notice and repository housekeeping
+**82 files changed, 6,895 insertions(+), 453 deletions(-)** across the branch — 15 added, 66
+modified, 1 deleted. **The change set proper is 75 of them: 11 added and 64 modified, at 6,360
+insertions and 452 deletions.** The other seven are this fork's notice and repository housekeeping
 (§12), which is what lets the tree stand on its own as a public fork of an MIT project.
 
 Everything below is listed by feature rather than by file, because that is how it was built:
@@ -216,7 +216,7 @@ source change set on its own.
 |---|---|
 | `NOTICE.md` | **New.** States that this is a modified fork, names the upstream author and the baseline commit, credits the modifications, lists which bundled parts keep their own licences, and disclaims affiliation. |
 | `README.upstream.md` | **New.** Upstream's README, reproduced unmodified and introduced as such. Its place is here rather than at the tail of `README.md`, where it would have made the fork's front page speak in the upstream author's first person about a release this fork does not ship. |
-| `README.md` | The bilingual banner at the top, and a front page written by the fork rather than by upstream: a *Downloads* section, what the fork adds, what it changes, what it leaves alone, the controls including the four chords it adds, the companion toolbox, what goes on the card, and the licensing position. |
+| `README.md` | The bilingual banner at the top, and a front page written by the fork rather than by upstream: a *Downloads* section, what the fork adds, what it changes, what it leaves alone, the controls including the four chords it adds, the companion toolbox, what goes on the card, installing it on two cards or on one, and the licensing position. |
 | `LICENSE` | A second copyright line for the modifications, added beneath the original one. The upstream notice itself is untouched. |
 | `CHANGES.md` | **New in the tree** — it already existed at the root of this package. Copying it in keeps the repository self-contained, since `NOTICE.md` links to it. |
 | `.gitattributes` | **New.** `* text=auto eol=lf`, plus an explicit `binary` for the asset types. Without it, a Windows checkout with `core.autocrlf=true` rewrites every file it touches, and every diff comes back as a whole-file change. |

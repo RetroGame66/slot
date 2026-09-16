@@ -34,7 +34,7 @@ without carrying a permanent divergence.
 
 ## What this fork changes
 
-**82 files, +6,829 / −454** against the baseline. The change set proper is 75 of them — eleven new
+**82 files, +6,895 / −453** against the baseline. The change set proper is 75 of them — eleven new
 files, 64 modified; the other seven are this fork's notice and repository housekeeping. The full
 list, by feature rather than by file, is in [`CHANGES.md`](CHANGES.md). In short, it adds: a Chinese
 interface whose typeface is read off the card rather than baked into the binary; a pinyin letter
