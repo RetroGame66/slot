@@ -2,10 +2,12 @@
 
 A diff against upstream **`4345cb8bdb`** (2026-09-11, *Merge branch 'feat/core-picker-board'*).
 
-**82 files changed, 6,895 insertions(+), 453 deletions(-)** across the branch — 15 added, 66
-modified, 1 deleted. **The change set proper is 75 of them: 11 added and 64 modified, at 6,360
-insertions and 452 deletions.** The other seven are this fork's notice and repository housekeeping
+**83 files changed, 7,658 insertions(+), 467 deletions(-)** across the branch — 16 added, 66
+modified, 1 deleted. **The change set proper is 76 of them: 12 added and 64 modified, at 6,594
+insertions and 392 deletions.** The other seven are this fork's notice and repository housekeeping
 (§12), which is what lets the tree stand on its own as a public fork of an MIT project.
+
+The counts above were taken again after §14 and §15 landed; both sections are in them.
 
 Everything below is listed by feature rather than by file, because that is how it was built:
 one concern at a time, with the files it touched.
