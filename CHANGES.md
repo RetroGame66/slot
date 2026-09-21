@@ -297,6 +297,16 @@ card that can be read without scrolling.
 | `slot-ui/src/shortcuts.rs` | **New.** The rows themselves: `Row::Head` / `Row::Key`, `SHORTCUT_ROWS` (22 of them, the shelf's eleven and the game's nine, each head included), `SHORTCUT_HINT`, and the faces. Two columns — the key's name ends at `KEY_COL`, the description starts a gap past it — haloed, because the card is drawn over a photograph. Four tests, one of which asserts the longest key still fits its column. |
 | `slot/src/app.rs` | `Phase::About { scroll, want }` (it used to be a bare `About`), `ABOUT_PAD` / `ABOUT_GAP` / `ABOUT_PAGE` / `ABOUT_EASE`, `about_first_y()`, `about_scroll_max()`, `set_shortcut_faces()`, and the draw loop that skips the rows off the panel. |
 | `slot/src/frontend.rs` | The 22 rows and the hint line are built at boot with the rest of the fixed furniture — opening the one screen whose job is to be read is the worst moment to be asking a font for twenty lines. |
+*A correction, made after the fact:* the label's compliance block had been missing
+`LIBRETRO` since it was written — the two cores are libretro cores and the README credits
+them — and `sticker::the_compliance_block_is_the_credits` had been failing for exactly that.
+The block names it now, and the ten lines still sit inside the column's 156 px.
+
+*A correction, made after the fact:* the label's compliance block had been missing
+`LIBRETRO` since it was written — the two cores are libretro cores and the README credits
+them — and `sticker::the_compliance_block_is_the_credits` had been failing for exactly that.
+The block names it now, and the ten lines still sit inside the column's 156 px.
+
 | `slot-ui/src/sticker.rs` | `draw_sticker_at()` — the label at a stated height rather than centred, because it is no longer the whole screen; `draw_sticker()` is that with the centred height. |
 
 ---
