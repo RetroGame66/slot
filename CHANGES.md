@@ -2,12 +2,12 @@
 
 A diff against upstream **`4345cb8bdb`** (2026-09-11, *Merge branch 'feat/core-picker-board'*).
 
-**83 files changed, 7,658 insertions(+), 467 deletions(-)** across the branch — 16 added, 66
-modified, 1 deleted. **The change set proper is 76 of them: 12 added and 64 modified, at 6,594
-insertions and 392 deletions.** The other seven are this fork's notice and repository housekeeping
+**99 files changed, 9,377 insertions(+), 828 deletions(-)** across the branch — 19 added, 79
+modified, 1 deleted. **The change set proper is 92 of them: 15 added and 77 modified, at 8,313
+insertions and 753 deletions.** The other seven are this fork's notice and repository housekeeping
 (§12), which is what lets the tree stand on its own as a public fork of an MIT project.
 
-The counts above were taken again after §14 and §15 landed; both sections are in them.
+The counts above were taken again after §18 landed; every section is in them.
 
 Everything below is listed by feature rather than by file, because that is how it was built:
 one concern at a time, with the files it touched.
@@ -301,8 +301,114 @@ card that can be read without scrolling.
 
 ---
 
+## 16. Light and dark modes
+
+The interface printed itself in one ink from the first commit to this one. It now prints in either,
+and the colours it prints in live in one module instead of six.
+
+Everything on the shelf was written in a single set of colours, and those colours were *constants*
+in the file that happened to need them: `letters::INK`, `hud::HUD_INK`, `plate::INK`, `clock::INK`,
+`battery::INK`, the card's case colours in `theme.txt`, and one black scrim over the wallpaper. Six
+copies of one idea is why a mode could not exist; `palette` owns all six now.
+
+Three decisions shape it. **The mode is remembered on the card** (`System/slot.state`'s `mode=`
+line) and a state file without that line reads dark, so a card written by the previous build boots
+exactly as it did. **It is switched with `SELECT+START` on the shelf and nowhere else** — the shelf,
+because the case and the letter strip are what the mode reprints, and answered there before the core
+picker can take the arrow keys. **A cart does not change**: a shell is a colour its owner chose and
+a label is artwork, and neither is chrome. A card's `theme.txt` still addresses the dark case only.
+
+Switching is not free, and the reason is worth stating: most type on this device is not drawn, it is
+*baked* — rasterised once into a texture with the ink burned into it — so a face that already exists
+cannot change colour and the binary re-bakes on the toggle. What does follow the mode for nothing is
+everything drawn as a filled quad: the case, the scrim, the gauge and the HUD's bar.
+
+| File | Change |
+|---|---|
+| `slot-ui/src/palette.rs` | **New.** `mode()` / `set_mode()` and every colour derived from them: `ink`, `dim_ink`, `panel_ink`, `halo`, `plate`, `panel`, `keycap`, `ground`, `ridge_ink`, `scrim`, `LIGHT_CASE`. A process-wide atomic rather than a parameter: the colours are read in some forty places, a dozen of them face builders running on another thread, to express a value with exactly one answer at any moment. |
+| `slot-ui/src/status.rs` | **New.** The status line — the clock at one end of the top band, the gauge and its percentage at the other, and in the middle the one badge that says which mode is on. |
+| `slot-store/src/slot_state.rs` | `Mode`, and the `mode` field it is read into. Anything unreadable reads `Dark`. |
+| `slot/src/app.rs` | `toggle_mode()`; `Action::ModeToggle` answered on the shelf and only while the core picker is shut; `Icon::of_mode(palette::mode())` for the badge. |
+| `slot-input/src/gesture.rs` | `Btn::Start => Action::ModeToggle` on the shelf, where it used to do nothing. |
+| `slot-ui/src/{battery,clock,plate,hud,slot_chrome,icon}.rs` | Each asks the palette instead of naming a constant. `battery` moved its percentage under the capsule and grew the gauge to 1.5×; `clock` gained `clock_face` / `CLOCK_PX`; `hud` clears the band (`PLATE_Y`); `icon` gained the sun and the moon. |
+| `slot-ui/tests/{battery,chrome,hud,shelf}.rs`, `slot-input/tests/gesture.rs` | The same assertions against a mode that can be either. |
+
+---
+
+## 17. The letter strip, laid flat
+
+§14 stood the ring on its end: a dial down the right-hand edge, scrolled in slots. It is now the
+thing it was upstream — a flat index across the top band — with the drum's metal kept, because the
+ridging was the one part of that experiment that read as machinery rather than as letters in a slot.
+Nine-pixel ridges at a twenty-four-pixel pitch, both ends tapering, the ends of the run outside the
+letters, and the whole strip centred on the band rather than on the window inside it, which is where
+it had been sitting low enough to look like an accident.
+
+The lit line under the band is gone. It had been mirrored from the cartridge bay's own front edge —
+where it means something, because a cart really is cut off there — and under the letters it read as
+a rule someone had drawn rather than as a moulding. The bay keeps its own.
+
+The gear is back in the strip. Type grew where it had been set too small to read at arm's length:
+the shelf's title 24 → 30, the clock 16 → 20.
+
+| File | Change |
+|---|---|
+| `slot-ui/src/letters.rs` | `SCALE = 0.8` as one multiplier over every shape (`PITCH`, `CENTRE_PX`, `NEIGHBOUR_PX`), `MODULE_MID` to centre on the band, the ridges restored, and the fade measured in slots (`FADE_FROM = 3.0 × PITCH`) so changing the scale cannot quietly flatten it. |
+| `slot-ui/src/shelf.rs` | `SHELF_TITLE_PX` 24 → 30 with `SHELF_TITLE_H` 34 → 40 — `fit` shrinks for width and has no opinion at all about height, so a larger title in an unchanged box is a title that gets clipped. |
+| `slot-ui/src/slot_chrome.rs` | The band stops printing its lit under-edge; the bay keeps it. |
+| `slot/src/{app,frontend}.rs`, `slot/src/root.rs` | The strip's layout, and the removal of `letter_nav()` / `write_letter_nav()`: the wheel-or-sidebar choice belonged to the drum, and a strip laid flat has no second way to stand. |
+
+---
+
+## 18. Two builds from one source
+
+The fork began as a translation done in place: upstream's English was replaced line by line, in
+whichever file each line lived in. That was the right shape for one language and the wrong shape for
+two — by this commit the strings were spread across ten files, with nothing holding the two
+languages beside each other and nothing to notice when one moved.
+
+`slot-ui/src/lang.rs` now holds the words, as two tables in one file, chosen **at compile time**.
+Chinese is the default, so the build that ships is the build that shipped before this commit;
+English is `--features device,lang-en`. A compile-time feature rather than a setting on the card,
+because the English build's whole point is to be free of the other language, and because the two are
+two artifacts rather than one artifact with a preference.
+
+The shortcut card keeps its own pair of tables in `shortcuts.rs` instead. A row is not a word: it is
+a key line and a description that have to fit a fixed column, so its wording is a layout decision as
+much as a translation, and the two belong in the file that owns the layout.
+
+**Most of the English is not a translation.** Upstream is an English program and this fork replaced
+its words, so the originals were recoverable from the commit the fork was taken from, and were
+recovered rather than reinvented: *State Saved*, *Power Off*, *Restarting*, *Back / Delete / Load*,
+*Bringing the radio up*, *Nobody arrived*, *set the clock*. Only what the fork added — the cheat and
+audio toasts, the clock hint, the whole card — is new writing.
+
+Two things about the columns are worth knowing before editing either table. The key line's budget is
+`DESC_X − HALO_PX`, because a keycap is its text plus padding and never narrower than a key. The
+description's budget is the card's own width, and it fails differently: `line()` asks `fit` for
+`f32::MAX`, so a description that is too long is **not** shrunk or wrapped, it is drawn past the row
+and clipped by it. In English capitals against the Chinese card's proportions that comes out at
+about eighteen characters, which is why several rows read terser than the Chinese they answer. Both
+columns are measured; a test already held the key line, and this adds one for the description.
+
+Tests name neither language. Where an assertion used to spell out a string it now asks `lang`, and
+where it was checking that two things differ it still says so without naming either.
+
+| File | Change |
+|---|---|
+| `slot-ui/src/lang.rs` | **New.** The vocabulary, twice: toasts, the power menu and its two shutdown lines, the clock hint's label, the switcher's legend, the core picker's legend, the link rows and their steps and failures, and the two undo labels. |
+| `slot-ui/src/shortcuts.rs` | A second `ROWS` and `HINT`, `cfg`-chosen, and the English rows written to the columns rather than translated into them. `L1`/`R1` where the Chinese card says `L` / `R`, because `L/R` is what the D-pad's left and right need two rows down. |
+| `slot-ui/src/{toast,power_menu,clock,polaroids}.rs`, `slot/src/{app,frontend,link_start}.rs` | Every user-visible literal replaced by a `lang` name. |
+| `slot-ui/Cargo.toml`, `slot/Cargo.toml` | `lang-en`; forwarded from `slot` so one flag switches the whole program. |
+| `crates/*/tests/*` | The assertions that named a string, and the description-column test. |
+
+---
+
 ## Notes for a reader of the diff
 
+- **The interface's words live in `slot-ui/src/lang.rs`**, in two tables, one of which is
+  compiled. The Chinese strings are still values the program parses and compares against — but they
+  are values in one place now, and the English build contains none of them.
 - **Comments are English throughout.** Chinese text still appears where it is *data* rather than
   prose: the UI's own translated strings, the hanzi the pinyin table is built from, and the
   `[中]` / `[日]` / `[英]` tags a dump's filename may carry. Those are values the program

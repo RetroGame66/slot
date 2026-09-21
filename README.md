@@ -22,15 +22,21 @@ the fork: what it adds, what it changes, and what the buttons actually do here.
 
 A modified build of `slot`, aimed at a Chinese GBA library living on one SD card.
 
-**82 files changed, +6,895 / −453** against upstream `4345cb8b` — 75 of them the change set proper
-(11 new files, 64 modified) and 7 the fork's notice and repository housekeeping. The full account,
+**99 files changed, +9,377 / −828** against upstream `4345cb8b` — 92 of them the change set proper
+(15 new files, 77 modified) and 7 the fork's notice and repository housekeeping. The full account,
 feature by feature and file by file with the reasoning, is in [`CHANGES.md`](CHANGES.md).
 
-The short of it: the interface is Chinese and takes its typeface off the card; the shelf grew a
-letter ring, because a library of hanzi has no alphabetical order of its own; a cart can carry its
-own cheats, button remap and display settings, so tuning lives with the card instead of with the
-binary; and the picture gained two things it never had — selectable panel-mask presets and a
-colour-correction stage — reachable from the device instead of by rebuilding.
+The short of it: the interface is Chinese and takes its typeface off the card; the shelf's index
+runs across the top of the case, because a library of hanzi has no alphabetical order of its own; a
+cart can carry its own cheats, button remap and display settings, so tuning lives with the card
+instead of with the binary; the whole frontend prints in either a dark case or a light one; and the
+picture gained two things it never had — selectable panel-mask presets and a colour-correction stage
+— reachable from the device instead of by rebuilding.
+
+**There are two builds of it.** The Chinese one is what this branch compiles by default; the English
+one is `--features device,lang-en`. They are one source tree — the interface's words live in
+`slot-ui/src/lang.rs`, in two tables one of which is compiled — so a change to the interface is a
+change to both, and neither is a translation of the other kept in a separate repository.
 
 ## Downloads
 
@@ -201,13 +207,12 @@ A `+` means both together. `†` marks a chord this fork adds; everything else i
 | Input           | Action                              |
 |-----------------|-------------------------------------|
 | `Left` / `Right`| Browse the cart row                 |
-| `Up` / `Down` † | Step the letter ring; the shelf follows |
-| `L` / `R` †     | The same step, from the shoulders   |
+| `L` / `R` †     | Step the letter index, one slot at a time |
 | Tap `A`         | Resume the last save state          |
 | Hold `A`        | Start the game fresh                |
 | `MENU`          | About screen, and the shortcut card under it |
 | `START`         | Choose which emulator runs the cart |
-| `SELECT` + `START` † | Stand up the other letter dial |
+| `SELECT` + `START` † | Print the interface light, or dark again |
 | `SELECT` + `VOL+` / `VOL-` † | Step the audio profile  |
 
 ### On the about card (`MENU`)
@@ -269,11 +274,13 @@ steps forward, `VOL-` back, and a toast (`音频：稳定` / `音频：均衡` /
 confirmation it gets — the setting moves no pixel, so without the line nothing on screen would say
 it moved.
 
-**`SELECT` + `START` — which letter dial is standing.** On the carousel. The ring reads two ways:
-laid across the panel above the cart row (**wheel**, the default) or stood on its end down the
-right-hand edge (**sidebar**). They are two views of one dial — same marker, same position, same
-counts — so swapping moves nothing and loses nothing, and `Up` / `Down` and `L` / `R` step whichever
-one is up. The choice is written to `System/letternav.txt` as `wheel` or `sidebar`.
+**`SELECT` + `START` — light or dark.** On the carousel. The whole frontend prints one of two ways:
+a dark case with light type, or a light case with dark type. The choice is written to
+`System/slot.state` as `mode=dark` or `mode=light` and survives a reboot; a state file written before
+this existed has no such line and reads dark, which is what that card was already showing. A
+cartridge does not change with it — a shell is a colour its owner chose and a label is artwork, and
+neither is chrome. Switching re-rasterises the type, because most of what is on this screen is baked
+into textures with the ink burned in.
 
 ### How the `SELECT` chords behave
 
