@@ -87,15 +87,19 @@ pub enum Action {
     AudioProfileNext,
     /// The same the other way, on SELECT+VOL-.
     AudioProfilePrev,
-    /// Switch which dial the shelf indexes letters with: the drum above the row, or the rail
-    /// down its right edge. Emitted on every screen like the other chords and answered only on
-    /// the shelf, which is the one screen with a library to index.
+    /// Which way round the frontend is printed, on SELECT+START.
     ///
-    /// SELECT+START rather than SELECT+B: START is bound to nothing but the core picker on the
-    /// shelf and reaches no game that has not been paused, so nothing loses a press to this.
-    /// B is every game's most-mashed key and the way out of every screen; even behind SELECT it
-    /// would be the one spare pair likeliest to be hit by accident.
-    LetterNavToggle,
+    /// START rather than B, L2 or R2, the other three the chord table leaves free. START is
+    /// what the shelf used to open the letter-view toggle with, before that toggle was removed,
+    /// so it is the one free slot already carrying the meaning "how the shelf is shown" rather
+    /// than being a key that has to be taught. And it costs nothing to reach for: a bare START
+    /// on the shelf opens the core picker and a bare B does nothing, so neither half of this
+    /// press is a gesture the user loses by making it a chord.
+    ///
+    /// Emitted on every screen, like the other chords — this file is blind to which one is up.
+    /// It is the app that lands it on the shelf, where the index and the case are the things
+    /// being printed.
+    ModeToggle,
 }
 
 #[derive(Copy, Clone, Default, PartialEq, Eq)]
@@ -472,7 +476,10 @@ fn chord(b: Btn) -> Option<(u16, Action)> {
         Btn::A => (256, Action::CheatToggle),
         Btn::VolUp => (512, Action::AudioProfileNext),
         Btn::VolDown => (1024, Action::AudioProfilePrev),
-        Btn::Start => (2048, Action::LetterNavToggle),
+        // The three the table left over. B is the one a hand reaches for by accident, and START
+        // is the one the shelf stopped using when the letter-view toggle went; L2 and R2 stay
+        // free for whatever needs a shoulder next.
+        Btn::Start => (2048, Action::ModeToggle),
         _ => return None,
     })
 }

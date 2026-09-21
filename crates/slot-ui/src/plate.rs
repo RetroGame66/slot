@@ -34,13 +34,28 @@ const LABEL_MAX_W: f32 = 140.0;
 pub const TITLE_W: u32 = 360;
 pub const TITLE_H: u32 = 24;
 
-const INK: [u8; 3] = [0xf6, 0xf4, 0xef];
-/// A cap is light with a dark letter on it, which is what a key looks like and the only
-/// thing separating the key from its label at this size.
-const CAP_INK: [u8; 3] = [0x1a, 0x19, 0x17];
+/// A cap is a filled square with its key cut out of it, which is what a key looks like and the
+/// only thing separating the key from its label at this size. The fill is the ink and the cut
+/// is the ink's opposite, in whichever mode — see `palette::panel_ink`.
+fn cap_ink() -> [u8; 3] {
+    crate::palette::panel_ink()
+}
+
+fn ink() -> [u8; 3] {
+    crate::palette::ink()
+}
+
 const KEY_PX: f32 = 14.0;
 const LABEL_PX: f32 = 16.0;
 const LABEL_MIN_PX: f32 = 10.0;
+/// The clock's own size, and the reason it is not just `word_face`'s.
+///
+/// `word_face` is what the battery's percent is set in as well, and the two sit at opposite ends
+/// of the same row: the time is the thing the eye goes to the band for and was asked to grow, the
+/// percent is a value beside an icon it belongs to and was not. One constant cannot be both, so
+/// the clock gets its own — four pixels up, and the same face otherwise.
+const CLOCK_PX: f32 = 20.0;
+const CLOCK_MIN_PX: f32 = 12.0;
 const TITLE_PX: f32 = 20.0;
 const TITLE_MIN_PX: f32 = 12.0;
 
@@ -51,9 +66,15 @@ const TITLE_MIN_PX: f32 = 12.0;
 ///
 /// One line, never two: a title that wraps moves its own bottom line every time the row
 /// moves, and the row is the thing being read.
+///
+/// The box grew with the type when the type was asked to. `H` is the box the string is
+/// rasterised into and `PX` is what it is set at, so a size that outgrew its box would be a
+/// clipped title rather than a failing test: the fitter shrinks for *width* and has no opinion
+/// about height at all. Forty is thirty plus five of air either side, which is what a CJK glyph
+/// at this size needs to keep its top and bottom strokes.
 pub const SHELF_TITLE_W: u32 = 640;
-pub const SHELF_TITLE_H: u32 = 34;
-const SHELF_TITLE_PX: f32 = 24.0;
+pub const SHELF_TITLE_H: u32 = 40;
+const SHELF_TITLE_PX: f32 = 30.0;
 const SHELF_TITLE_MIN_PX: f32 = 14.0;
 
 pub struct UndoFace {
@@ -112,11 +133,11 @@ pub fn hint_face(key: &str, label: &str) -> UndoFace {
     let cap_w = cap_width(key);
     let mut cap = Vec::with_capacity((cap_w * CAP * 4) as usize);
     for _ in 0..cap_w * CAP {
-        cap.extend_from_slice(&[INK[0], INK[1], INK[2], 255]);
+        cap.extend_from_slice(&[ink()[0], ink()[1], ink()[2], 255]);
     }
     if let Some(font) = text::label_font() {
         let layout = text::fit(font, key, cap_w as f32, 1, KEY_PX, KEY_PX);
-        text::draw_centred(&mut cap, cap_w, CAP, &layout, CAP_INK);
+        text::draw_centred(&mut cap, cap_w, CAP, &layout, cap_ink());
     }
     blit(&mut rgba, w, &cap, cap_w, CAP, 0, (HINT_H - CAP) / 2);
 
@@ -124,7 +145,7 @@ pub fn hint_face(key: &str, label: &str) -> UndoFace {
     let mut band = vec![0u8; (text_w * HINT_H * 4) as usize];
     if let Some(font) = text::label_font() {
         let layout = text::fit(font, label, text_w as f32, 1, LABEL_PX, LABEL_MIN_PX);
-        text::draw_centred(&mut band, text_w, HINT_H, &layout, INK);
+        text::draw_centred(&mut band, text_w, HINT_H, &layout, ink());
     }
     blit(&mut rgba, w, &band, text_w, HINT_H, cap_w + CAP_GAP, 0);
 
@@ -134,7 +155,7 @@ pub fn hint_face(key: &str, label: &str) -> UndoFace {
 /// The same type as a hint's label, with no key cap in front of it. What the shelf prints on
 /// the case: the wordmark and the time, in the font the buttons are labelled in.
 pub fn word_width(text: &str) -> u32 {
-    band_width(text)
+    band_width_at(text, LABEL_PX, LABEL_MIN_PX)
 }
 
 pub fn word_face(text: &str) -> UndoFace {
@@ -142,7 +163,24 @@ pub fn word_face(text: &str) -> UndoFace {
     let mut rgba = vec![0u8; (w * HINT_H * 4) as usize];
     if let Some(font) = text::label_font() {
         let layout = text::fit(font, text, w as f32, 1, LABEL_PX, LABEL_MIN_PX);
-        text::draw_centred(&mut rgba, w, HINT_H, &layout, INK);
+        text::draw_centred(&mut rgba, w, HINT_H, &layout, ink());
+    }
+    UndoFace { rgba, w, h: HINT_H }
+}
+
+/// The time, at its own size. Same face, same band height, same ink as `word_face` — only the
+/// size differs, and it differs because the clock is the one reading on the band the eye goes to
+/// on purpose rather than a value hanging off an icon.
+pub fn clock_width(text: &str) -> u32 {
+    band_width_at(text, CLOCK_PX, CLOCK_MIN_PX)
+}
+
+pub fn clock_face(text: &str) -> UndoFace {
+    let w = clock_width(text);
+    let mut rgba = vec![0u8; (w * HINT_H * 4) as usize];
+    if let Some(font) = text::label_font() {
+        let layout = text::fit(font, text, w as f32, 1, CLOCK_PX, CLOCK_MIN_PX);
+        text::draw_centred(&mut rgba, w, HINT_H, &layout, ink());
     }
     UndoFace { rgba, w, h: HINT_H }
 }
@@ -173,10 +211,18 @@ pub fn hint_quad(x: f32, y: f32, w: f32, face: Option<TexId>) -> Draw {
 /// How wide the type alone comes out, which is what the hint is sized around. A label the
 /// fitter had to break lands at `LABEL_MAX_W`, since that is the width it was broken to.
 fn band_width(label: &str) -> u32 {
+    band_width_at(label, LABEL_PX, LABEL_MIN_PX)
+}
+
+/// The same, at a stated size. The clock and the battery's percent are one band of type rendered
+/// twice at two sizes, and this is the one place the size is a parameter rather than a constant —
+/// which is what keeps their widths, their shrink thresholds and their fitter rules from drifting
+/// apart the moment one of the two sizes is touched.
+fn band_width_at(label: &str, px: f32, min_px: f32) -> u32 {
     let Some(font) = text::label_font() else {
         return LABEL_MAX_W as u32;
     };
-    let layout = text::fit(font, label, LABEL_MAX_W, 1, LABEL_PX, LABEL_MIN_PX);
+    let layout = text::fit(font, label, LABEL_MAX_W, 1, px, min_px);
     let ink = layout
         .lines
         .iter()
@@ -190,7 +236,7 @@ pub fn title_face(text: &str) -> UndoFace {
     let mut rgba = vec![0u8; (TITLE_W * TITLE_H * 4) as usize];
     if let Some(font) = text::label_font() {
         let layout = text::fit(font, text, TITLE_W as f32, 1, TITLE_PX, TITLE_MIN_PX);
-        text::draw_centred(&mut rgba, TITLE_W, TITLE_H, &layout, INK);
+        text::draw_centred(&mut rgba, TITLE_W, TITLE_H, &layout, ink());
     }
     UndoFace {
         rgba,
@@ -214,7 +260,7 @@ pub fn shelf_title_face(text: &str) -> UndoFace {
             SHELF_TITLE_PX,
             SHELF_TITLE_MIN_PX,
         );
-        text::draw_centred(&mut rgba, SHELF_TITLE_W, SHELF_TITLE_H, &layout, INK);
+        text::draw_centred(&mut rgba, SHELF_TITLE_W, SHELF_TITLE_H, &layout, ink());
     }
     UndoFace {
         rgba,
@@ -263,7 +309,7 @@ pub fn arrows_hint_face(label: &str) -> UndoFace {
     let mut band = vec![0u8; (text_w * HINT_H * 4) as usize];
     if let Some(font) = text::label_font() {
         let layout = text::fit(font, label, text_w as f32, 1, LABEL_PX, LABEL_MIN_PX);
-        text::draw_centred(&mut band, text_w, HINT_H, &layout, INK);
+        text::draw_centred(&mut band, text_w, HINT_H, &layout, ink());
     }
     blit(
         &mut rgba,
@@ -281,7 +327,7 @@ pub fn arrows_hint_face(label: &str) -> UndoFace {
 fn glyph_cap(glyph: char) -> Vec<u8> {
     let mut cap = Vec::with_capacity((CAP * CAP * 4) as usize);
     for _ in 0..CAP * CAP {
-        cap.extend_from_slice(&[INK[0], INK[1], INK[2], 255]);
+        cap.extend_from_slice(&[ink()[0], ink()[1], ink()[2], 255]);
     }
     let Some(font) = crate::icon::symbols_font() else {
         return cap;
@@ -299,7 +345,7 @@ fn glyph_cap(glyph: char) -> Vec<u8> {
             let at = ((dy as u32 * CAP + dx as u32) * 4) as usize;
             for k in 0..3 {
                 cap[at + k] =
-                    ((CAP_INK[k] as u32 * a + cap[at + k] as u32 * (255 - a)) / 255) as u8;
+                    ((cap_ink()[k] as u32 * a + cap[at + k] as u32 * (255 - a)) / 255) as u8;
             }
         }
     }

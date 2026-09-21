@@ -18,11 +18,20 @@ const FADE_MS: Millis = 250;
 /// with the switcher's two plates, so everything that ever sits on top of a picture reads as
 /// one system.
 pub const PLATE_H: f32 = 40.0;
-pub(crate) const PLATE: [f32; 4] = [0.0, 0.0, 0.0, 0.72];
+
+/// Where the plate hangs when there is a letter band above it: flush against that band's lower
+/// edge, so the dark starts exactly where the case stops.
+///
+/// The plate used to start hard at the top of the screen, which was right for a screen with
+/// nothing at the top of it. On the shelf there is now a band there, with the index printed
+/// along it and the clock and battery on its ends, and a plate over all of that for the second
+/// and a half a level is up hides the very things the band is for. Under the band it covers
+/// only the picture, which is what a plate is for.
+///
+/// It is the band's own height rather than a second number, so the two cannot drift apart.
+pub const PLATE_Y: f32 = crate::slot_chrome::TOP_BAND_H;
 
 pub const HUD_ICON_PX: f32 = 24.0;
-/// One ink for the glyph and the fill, so the row reads as one control.
-pub const HUD_INK: [u8; 3] = [0xf5, 0xf2, 0xef];
 const ICON_GAP: f32 = 10.0;
 
 /// The badge sits in the corner the bar never reaches, so the two never have to negotiate.
@@ -32,12 +41,18 @@ const BAR_W: f32 = 320.0;
 const BAR_H: f32 = 6.0;
 const BAR_Y: f32 = (PLATE_H - BAR_H) / 2.0;
 const TRACK: [f32; 4] = [1.0, 1.0, 1.0, 0.18];
-const FILL: [f32; 4] = [
-    HUD_INK[0] as f32 / 255.0,
-    HUD_INK[1] as f32 / 255.0,
-    HUD_INK[2] as f32 / 255.0,
-    1.0,
-];
+
+/// The bar's fill. The palette's ink rather than a colour of its own, which is what the glyph
+/// beside it is drawn in and what every letter on the shelf is set in: one ink per mode, and
+/// the HUD is not a second one.
+///
+/// The track stays translucent white in both modes, and it is the one value in here that does
+/// not flip. It is not type, it is the bar a fill runs along, and the plate under it is black
+/// at 0.72 in the dark and would be the case's own light in the light — a track that matched
+/// the plate would stop being a track.
+fn fill() -> [f32; 4] {
+    crate::palette::ink_f()
+}
 
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
 pub enum HudKind {
@@ -176,6 +191,13 @@ impl Hud {
         ff_badge(self.ff)
     }
 
+    /// One glyph's face, whether or not the HUD is showing it. Keyed by the icon rather than by
+    /// the kind, because the one caller that is not a level is the status row's mode badge:
+    /// `Icon::of_mode` says which of the two it wants and the list is in `Icon::ALL` order.
+    pub fn face(&self, icon: Icon) -> Option<TexId> {
+        self.icons.get(icon.index()).copied()
+    }
+
     /// Pushed from outside because the badge answers to the gesture machine's latch, which
     /// nothing on this side of the app can see.
     pub fn set_ff(&mut self, ff: FfState) {
@@ -186,7 +208,11 @@ impl Hud {
         self.alpha(now) > 0.0
     }
 
-    pub fn draw(&self, now: Millis, out: &mut Vec<Draw>) {
+    /// `top` is where the plate hangs, and it is the only number that has to be told: the bar,
+    /// the toast and the badge are all laid out *inside* the plate, so moving the plate moves
+    /// the whole readout. Callers pass `PLATE_Y` on a screen that has the letter band at the
+    /// top and zero on one that does not.
+    pub fn draw(&self, now: Millis, top: f32, out: &mut Vec<Draw>) {
         let alpha = self.alpha(now);
         let toast = self.toast_alpha(now);
         // The plate belongs to whatever is being read against it, bar or toast. The badge
@@ -195,29 +221,29 @@ impl Hud {
         if alpha > 0.0 || toast > 0.0 {
             out.push(Draw::Rect {
                 x: 0.0,
-                y: 0.0,
+                y: top,
                 w: OUT_W as f32,
                 h: PLATE_H,
-                colour: faded(PLATE, alpha.max(toast)),
+                colour: faded(crate::palette::plate(), alpha.max(toast)),
             });
         }
         // They share the band, so only one at a time. A toast is a specific thing that just
         // happened and outranks a level the user can see the effect of anyway.
         if toast > 0.0 {
-            self.draw_toast(now, out);
+            self.draw_toast(top, now, out);
         } else if alpha > 0.0 {
-            self.draw_bar(alpha, out);
+            self.draw_bar(top, alpha, out);
         }
-        self.draw_badge(ff_badge(self.ff), out);
+        self.draw_badge(top, ff_badge(self.ff), out);
     }
 
-    fn draw_bar(&self, alpha: f32, out: &mut Vec<Draw>) {
+    fn draw_bar(&self, top: f32, alpha: f32, out: &mut Vec<Draw>) {
         let x = (OUT_W as f32 - BAR_W) / 2.0;
         if let Some(tex) = self.icon() {
             let (w, h) = icon_box(HUD_ICON_PX);
             out.push(Draw::Tex {
                 x: x - ICON_GAP - w as f32,
-                y: (PLATE_H - h as f32) / 2.0,
+                y: top + (PLATE_H - h as f32) / 2.0,
                 w: w as f32,
                 h: h as f32,
                 tex,
@@ -226,21 +252,21 @@ impl Hud {
         }
         out.push(Draw::Rect {
             x,
-            y: BAR_Y,
+            y: top + BAR_Y,
             w: BAR_W,
             h: BAR_H,
             colour: faded(TRACK, alpha),
         });
         out.push(Draw::Rect {
             x,
-            y: BAR_Y,
+            y: top + BAR_Y,
             w: BAR_W * self.fraction(),
             h: BAR_H,
-            colour: faded(FILL, alpha),
+            colour: faded(fill(), alpha),
         });
     }
 
-    fn draw_badge(&self, badge: Option<Icon>, out: &mut Vec<Draw>) {
+    fn draw_badge(&self, top: f32, badge: Option<Icon>, out: &mut Vec<Draw>) {
         let Some(icon) = badge else {
             return;
         };
@@ -251,7 +277,7 @@ impl Hud {
         let (w, h) = (w as f32, h as f32);
         out.push(Draw::Tex {
             x: OUT_W as f32 - BADGE_MARGIN - w,
-            y: (PLATE_H - h) / 2.0,
+            y: top + (PLATE_H - h) / 2.0,
             w,
             h,
             tex,
@@ -261,7 +287,7 @@ impl Hud {
 
     /// No placeholder. A toast is type, and absent type is absent rather than a bar sitting
     /// where two words should be.
-    fn draw_toast(&self, now: Millis, out: &mut Vec<Draw>) {
+    fn draw_toast(&self, top: f32, now: Millis, out: &mut Vec<Draw>) {
         let alpha = self.toast_alpha(now);
         if alpha <= 0.0 {
             return;
@@ -273,10 +299,12 @@ impl Hud {
         else {
             return;
         };
+        // `toast_rect` places the box inside a plate standing at zero, so the plate's own top
+        // is added here rather than being worked out again down there.
         let (x, y, w, h) = toast_rect();
         out.push(Draw::Tex {
             x,
-            y,
+            y: top + y,
             w,
             h,
             tex,

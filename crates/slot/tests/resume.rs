@@ -1,6 +1,7 @@
 mod common;
 
-use slot::audio::{AudioSink, StubSink};
+//  is the latency profile the app picks at boot; these tests want the default one.
+use slot::audio::{AudioSink, Profile, StubSink};
 use slot::emu::{CoreState, EmuHandle};
 use slot::persist;
 use slot::persist::Snapshot;
@@ -27,6 +28,7 @@ fn a_resume_state_is_restored_before_the_core_reports_ready() {
         StubSink::new().ring(),
         None,
         Some(500_000u64.to_le_bytes().to_vec()),
+        Profile::default(),
     );
     wait_ready(&emu);
     let state = emu.request_state().recv().unwrap();
@@ -101,6 +103,7 @@ fn srm_bytes_on_disk_reach_the_cores_save_ram() {
         StubSink::new().ring(),
         persist::read_sav(d.path(), "Emerald"),
         persist::read_resume(d.path(), slot_store::Core::Mgba, "Emerald"),
+        Profile::default(),
     );
     wait_ready(&emu);
     let got = emu.snapshot().save_ram().expect("the core has no save ram");
@@ -138,6 +141,7 @@ fn a_mismatched_save_ram_and_resume_are_flagged_untrusted_rather_than_silently_s
         StubSink::new().ring(),
         Some(real_sav),
         Some(real_resume),
+        Profile::default(),
     );
     wait_ready(&emu);
     let snapshot = emu.snapshot();
@@ -182,6 +186,7 @@ fn a_power_press_does_not_let_a_refusing_mock_overwrite_a_real_save() {
         StubSink::new().ring(),
         sav,
         resume,
+        Profile::default(),
     );
     wait_ready(&emu);
 
@@ -226,6 +231,7 @@ fn an_eject_does_not_let_a_refusing_mock_overwrite_a_real_save() {
         StubSink::new().ring(),
         sav,
         resume,
+        Profile::default(),
     );
     wait_ready(&emu);
 
@@ -277,6 +283,7 @@ fn a_refusing_mock_does_not_evict_a_real_ring_entry_on_manual_save() {
         StubSink::new().ring(),
         Some(real_sav),
         Some(real_resume),
+        Profile::default(),
     );
     wait_ready(&emu);
     assert!(

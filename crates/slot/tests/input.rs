@@ -1,3 +1,10 @@
+// The host keyboard map is only compiled into a host build — `slot::input::HostInput` and `winit`
+// both sit behind the `host` feature. Guarding the file rather than the individual tests is the
+// same shape `render.rs` uses for its macOS-only screen, and it is what lets `--all-targets` be
+// run against a device build at all: without it, a device check tries to compile a file that
+// cannot exist there and reports two errors that say nothing about the device.
+#![cfg(feature = "host")]
+
 use slot::input::HostInput;
 use slot_input::{Btn, InputSource, RawEvent};
 use winit::keyboard::KeyCode;

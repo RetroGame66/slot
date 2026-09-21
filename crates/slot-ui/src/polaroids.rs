@@ -4,9 +4,10 @@ use slot_store::{parse_stamp, StateEntry};
 
 use crate::art;
 use crate::battery::{draw_gauge, GAUGE_H};
-use crate::footer::{draw_printed, Printed};
-use crate::hud::{PLATE, PLATE_H};
+use crate::hud::PLATE_H;
+use crate::palette;
 use crate::plate::{hint_quad, hint_row, hint_width, Hint, HINT_GAP, HINT_H, TITLE_H, TITLE_W};
+use crate::status::{draw_printed, Printed};
 
 /// The screenshot is the screen. 240x160 scales to 720x480 at exactly 3x, the same integer
 /// scale the game runs at, so the switcher shows the frame that was paused rather than a
@@ -32,7 +33,7 @@ const MARGIN: f32 = 16.0;
 /// Every action the switcher takes is on it: an unlabelled button is one nobody presses. The
 /// ways out of the switcher come first and the things done to the state on screen after, since
 /// that is the split the plate is laid out on.
-pub const LEGEND: [(&str, &str); 3] = [("B", "返回"), ("Y", "删除"), ("A", "读取")];
+pub const LEGEND: [(&str, &str); 3] = crate::lang::SWITCHER_LEGEND;
 /// How many of `hints` belong to the left end of the plate. The rest go to the right, the undo
 /// with them: undoing acts on the entry under the eye, as loading it does.
 const WAYS_OUT: usize = 2;
@@ -228,29 +229,28 @@ impl Polaroids {
         }
 
         // The centred title on this screen is itself a timestamp — when the state was taken.
-        // The gauge and the clock are live device status, and land at the same two corners
-        // the case band already uses them at — battery left, clock right — so the switcher
-        // reads as the same status the case showed a moment ago, not a mirrored one.
+        // The gauge and the clock are live device status, and land at the two corners the
+        // case's own band puts them at — clock left, battery right — so the switcher reads as
+        // the same status the shelf showed a moment ago, not a mirrored one.
         //
         // No capsule at all rather than an empty one: a device with no battery node has
         // nothing to say. `draw_gauge` already early-returns on `None`, the same way the
-        // footer calls it, so the two screens degrade identically rather than one of them
+        // status band calls it, so the two screens degrade identically rather than one of them
         // guarding a call the callee already guards.
+        //
+        // `draw_printed` rather than a bare `Draw::Tex`, and no check on the width: a clock
+        // whose face has not arrived yet still has to hold its space at the margin, not leave
+        // the corner looking like nothing was ever going to sit there, which is the same
+        // degenerate case it is here.
+        draw_printed(MARGIN, (PLATE_H - HINT_H as f32) / 2.0, clock, out);
         draw_gauge(
-            MARGIN,
+            OUT_W as f32 - MARGIN,
             (PLATE_H - GAUGE_H) / 2.0,
             battery,
             battery_percent,
             bolt,
             out,
         );
-        // `draw_printed` rather than a bare `Draw::Tex`: a clock whose face has not arrived
-        // yet still has to hold its space at the margin, not leave the corner looking like
-        // nothing was ever going to sit there.
-        if clock.w > 0 {
-            let x = OUT_W as f32 - MARGIN - clock.w as f32;
-            draw_printed(x, (PLATE_H - HINT_H as f32) / 2.0, clock, out);
-        }
     }
 
     /// The ways out at the left end, what acts on the state at the right. Two groups rather
@@ -326,6 +326,6 @@ fn plate(y: f32) -> Draw {
         y,
         w: OUT_W as f32,
         h: PLATE_H,
-        colour: PLATE,
+        colour: palette::plate(),
     }
 }

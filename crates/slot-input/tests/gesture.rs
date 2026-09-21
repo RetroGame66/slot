@@ -48,6 +48,36 @@ fn select_and_volume_keys_switch_the_audio_profile() {
     }
 }
 
+/// SELECT+START prints the device the other way round.
+///
+/// START is also the shelf's core picker on its own, which is what makes this worth holding at
+/// the gesture layer rather than only at the app's: the chord has to swallow the press, or the
+/// picker would open under the mode change and the shelf would come back with its lid off.
+#[test]
+fn select_and_start_toggle_the_mode() {
+    let mut g = Gestures::new();
+    g.feed(RawEvent::Down(Select), 0);
+    assert_eq!(g.feed(RawEvent::Down(Btn::Start), 10), vec![ModeToggle]);
+    // The release of the chorded key is swallowed with the press: a bare START is a gesture the
+    // shelf answers, and half of one arriving after the chord would be a second gesture.
+    assert!(g.feed(RawEvent::Up(Btn::Start), 60).is_empty());
+    assert!(g.feed(RawEvent::Up(Select), 70).is_empty());
+}
+
+/// And with no SELECT down, START is the picker's again — the chord does not take the button.
+#[test]
+fn start_alone_is_still_the_game_button() {
+    let mut g = Gestures::new();
+    assert_eq!(
+        g.feed(RawEvent::Down(Btn::Start), 0),
+        vec![GbaDown(Btn::Start)]
+    );
+    assert_eq!(
+        g.feed(RawEvent::Up(Btn::Start), 30),
+        vec![GbaUp(Btn::Start)]
+    );
+}
+
 #[test]
 fn select_released_inside_the_window_still_reaches_the_game() {
     let mut g = Gestures::new();

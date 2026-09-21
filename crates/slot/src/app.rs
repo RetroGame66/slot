@@ -8,13 +8,14 @@ use slot_store::{
     format_stamp, read_slot_state, scan_cached, write_slot_state, Cart, Core, SlotState,
     StateEntry, StateRing, Theme, BLUE_LIGHT_MAX, BRIGHTNESS_MAX, RING_MAX, VOLUME_MAX,
 };
+use slot_ui::lang;
 use slot_ui::{
-    board_at, board_zoom, draw_backdrop, draw_empty_slot, draw_footer, draw_shortcut_row,
-    draw_sticker_at, ease, grown, letters, lid_at, lift_of, on_board, ClockPicker, Draw, FfState,
-    Hud, HudKind, Icon, Letters, Millis, Placed, Polaroids, PowerChoice, Refusal, Shelf,
-    SlotChrome, TexId, Toast, BOARD_W, BOARD_X, CART_H, CART_W, CHIP_H, CHIP_U, CHIP_V, CHIP_W,
-    HINT_EDGE, HINT_H, HOP_LIFT, MOUTH_H, SHADOW_H, SHADOW_W, SHELF_TITLE_H, SOCKET_H, SOCKET_U,
-    SOCKET_V, SOCKET_W, STICKER_H, TURN_PAD,
+    board_at, board_zoom, draw_backdrop, draw_edge_glow, draw_empty_slot, draw_shortcut_row,
+    draw_status, draw_sticker_at, draw_top_band, ease, grown, letters, lid_at, lift_of, on_board,
+    ClockPicker, Draw, FfState, Hud, HudKind, Icon, Letters, Millis, Placed, Polaroids,
+    PowerChoice, Refusal, Shelf, SlotChrome, TexId, Toast, BOARD_W, BOARD_X, CART_H, CART_W,
+    CHIP_H, CHIP_U, CHIP_V, CHIP_W, HINT_EDGE, HINT_H, HOP_LIFT, MOUTH_H, PLATE_Y, SHADOW_H,
+    SHADOW_W, SHELF_TITLE_H, SOCKET_H, SOCKET_U, SOCKET_V, SOCKET_W, STICKER_H, TURN_PAD,
 };
 
 use crate::audio::{Profile, Sfx};
@@ -210,7 +211,7 @@ impl GameRow {
 
     pub fn text(self) -> &'static str {
         match self {
-            GameRow::Link => "联机",
+            GameRow::Link => lang::LINK_ROW,
         }
     }
 }
@@ -233,8 +234,8 @@ impl LinkRow {
 
     pub fn text(self) -> &'static str {
         match self {
-            LinkRow::Host => "主机",
-            LinkRow::Join => "加入",
+            LinkRow::Host => lang::LINK_HOST,
+            LinkRow::Join => lang::LINK_JOIN,
         }
     }
 
@@ -309,29 +310,9 @@ const SHELF_TITLE_Y: f32 = {
     (foot + case) / 2.0 - SHELF_TITLE_H as f32 / 2.0
 };
 
-/// How far short of a letter's first cart the row is put before the spring is let go, when the
-/// letter ring moves the caret rather than the arrow keys.
-///
-/// One, and it cannot be more. The row draws the carts from three either side of the selection
-/// and places them by how far the spring is behind it, so setting it back `k` carts shifts
-/// every one of them `k` places to the right. At one, the three carts that fill a 720 px screen
-/// are still the three it draws — a neighbour, the chosen cart at the right edge, and the one
-/// after it — and the chosen cart slides in from that edge as a side cart and grows into the
-/// hero along the way, which is the row's own flick and not a second animation.
-///
-/// At two it starts off screen instead, and the three carts on screen are the three *before*
-/// it: the flip is watched across carts the user did not ask for, and on a card where faces are
-/// built on demand those are the three that are least likely to have one yet.
-///
-/// So the flip is one cart wide however far the jump was, and it is the dial that says how far
-/// it went. Which is also why the row is not left to travel the whole distance: a jump across
-/// the alphabet crosses hundreds of carts, and a spring crossing all of them would spend
-/// seconds sliding a blur of faces past the eye.
-const LETTER_SEAT_SHORT: f32 = 1.0;
-
 /// How many carts fall under each slot of the letter ring, in `letters::SLOTS` order.
 ///
-/// One pass at boot and never again: the card cannot change while slot is running. The dial
+/// One pass at boot and never again: the card cannot change while slot is running. The strip
 /// reads it to know which letters are worth stopping on and which are drawn dim, so it has to
 /// be counted from the same list the row is drawn from rather than from anything on disk.
 fn tally_letters(carts: &[Cart]) -> [usize; letters::N] {
@@ -354,14 +335,50 @@ fn about_first_y() -> f32 {
     ABOUT_PAD + STICKER_H as f32 + ABOUT_GAP
 }
 
+/// The bar the pinned foot line is set on: the panel's full width, opaque, flush with the
+/// bottom edge. Drawn here rather than baked into the hint's own face, because it belongs to
+/// the screen and not to the card — the card is 660 across, this is all 720.
+const HINT_BAR_INK: [f32; 4] = [0.055, 0.05, 0.045, 1.0];
+/// The bar's lit top edge: a few hairlines fading upward, which is as close as a list of flat
+/// rects comes to a glow. Faint on purpose — it is a rim light, not a light.
+const HINT_GLOW_STEPS: u32 = 8;
+const HINT_GLOW_H: f32 = 1.5;
+const HINT_GLOW_A: f32 = 0.13;
+const HINT_GLOW_INK: [f32; 3] = [0.86, 0.83, 0.77];
+
 /// How far one press takes the card. Six rows: less than that is a card the user has to walk to
 /// the end of, and a whole screen is a card that jumps past the line it was being read at.
 const ABOUT_PAGE: f32 = 180.0;
 
 /// How fast the card closes on where the last press asked it to go, as a share of the way there
-/// per second. Slower than the letter dial's spring on purpose: this is text being moved, and
+/// per second. Slower than the letter strip's spring on purpose: this is text being moved, and
 /// there is nothing here that has to land on anything.
 const ABOUT_EASE: f32 = 9.0;
+
+/// The footer band and the faint light along its top edge. Opaque and the panel's full width,
+/// so the rows scrolling under it pass behind it rather than through it. `top` is where the
+/// band starts; the glow is laid above it, brightest against the edge.
+fn draw_hint_bar(top: f32, out: &mut Vec<Draw>) {
+    out.push(Draw::Rect {
+        x: 0.0,
+        y: top,
+        w: OUT_W as f32,
+        h: (OUT_H as f32 - top).max(0.0),
+        colour: HINT_BAR_INK,
+    });
+    for i in 0..HINT_GLOW_STEPS {
+        // Brightest next to the edge, dimming as it climbs away from it.
+        let a = HINT_GLOW_A * (i as f32 + 1.0) / HINT_GLOW_STEPS as f32;
+        let y = top - (HINT_GLOW_STEPS - i) as f32 * HINT_GLOW_H;
+        out.push(Draw::Rect {
+            x: 0.0,
+            y,
+            w: OUT_W as f32,
+            h: HINT_GLOW_H,
+            colour: [HINT_GLOW_INK[0], HINT_GLOW_INK[1], HINT_GLOW_INK[2], a],
+        });
+    }
+}
 
 /// The on-screen picture's two independent knobs.
 ///
@@ -376,10 +393,9 @@ const ABOUT_EASE: f32 = 9.0;
 /// backlight. Each is cycled on its own chord — SELECT+X for the mask, SELECT+Y for the colour —
 /// and the pair is persisted to `System/display.txt` as two integers "mask_mode cc_mode".
 ///
-/// HALFCOLOR and the four tinted backlights are done in **linear** (`CC_GAMMA`). Multiplying in
-/// the encoded space darkens a half-colour and washes a tinted backlight out; converting to
-/// linear, multiplying and converting back is what looks right, and is what RetroArch's handheld
-/// shaders do. FULLCOLOR and NOCOLOR still run at gamma 1.0 and behave exactly as they did.
+/// 半彩与四档单色背光在**线性空间**里做（`CC_GAMMA`）：直接在编码空间乘会把半彩压暗、
+/// 把单色背光冲淡；转线性、乘完再转回，观感才对（RetroArch 手持着色器同法）。
+/// FULLCOLOR 与 NOCOLOR 仍走 gamma 1.0，行为与旧版一致。
 struct DisplayFilter {
     /// The card's LCD3x table if it ships one, else the built-in. Only used when `mask_mode` is 1 or 2.
     lcd3x: [[[u8; 3]; 3]; 3],
@@ -419,19 +435,15 @@ impl DisplayFilter {
     /// colours are lifted from the light palettes of the pixel reader we built before
     /// (`PXReader/reader.c` light group): GB (DMG green) / LCDB (ice-blue) / SEPIA (amber) /
     /// PINKBG (pink). Modes 3..=6.
-    /// The gamma the colour correction is done in (the `u_cc_gamma` uniform of `GAME_FRAG`).
-    /// 2.2 is sRGB. Only HALFCOLOR and the four tinted backlights use it; FULLCOLOR (0) and
-    /// NOCOLOR (2) are pushed at 1.0 and so still multiply in the encoded space, bit for bit as
-    /// they did before — the card's `cc.txt` override keeps its meaning for NOCOLOR too.
+    /// 线性空间里做色彩校正所用的 gamma（对应 `GAME_FRAG` 的 `u_cc_gamma`）。
+    /// 2.2 = sRGB。只有「半彩」和四档单色背光用它；FULLCOLOR(0)/NOCOLOR(2) 传 1.0，
+    /// 仍是编码空间直乘，与旧版逐位一致（NOCOLOR 的 cc.txt 卡内覆盖语义也不变）。
     pub const CC_GAMMA: f32 = 2.2;
-    /// The four tinted backlights: the picture's brightness remapped onto a **coloured backlight**.
-    /// Because it is done in linear (see `CC_GAMMA`), a row is "the target colour's linear value
-    /// times the luma weight (0.299/0.587/0.114)". That puts the brightest part of the picture
-    /// exactly on the target colour and lets gamma pull the mid-tones apart, which is what makes
-    /// the tint read as rich. Multiplying in the encoded space, as this used to, washed the
-    /// mid-tones toward grey and left all four looking pale.
-    /// The peak colours: DMG green rgb(155,188,15), ice-blue rgb(120,170,215),
-    /// amber rgb(240,165,60), pink rgb(240,130,185).
+    /// 四档单色背光：把画面亮度重新映射成一块**彩色背光**。
+    /// 因为是在线性空间里做（见 `CC_GAMMA`），行系数 = 「目标峰值色的线性值 × 亮度权重
+    /// (0.299/0.587/0.114)」——这样画面最亮处正好落在目标色上，中间调被 gamma 拉出层次，
+    /// 于是观感浓郁；先前在编码空间直乘，中间调被冲成灰调，四档都发淡。
+    /// 峰值色：DMG 绿 rgb(155,188,15) / 冰蓝 rgb(120,170,215) / 琥珀 rgb(240,165,60) / 粉 rgb(240,130,185)。
     const DMG_GREEN_CC: [[f32; 3]; 3] = [
         [0.1000, 0.1963, 0.0381],
         [0.1529, 0.3002, 0.0583],
@@ -528,72 +540,26 @@ pub(crate) struct CheatItem {
     pub(crate) enabled: bool,
 }
 
-/// Which of the two dials the shelf indexes its letters with.
-///
-/// One `Letters` behind both of them — one position, one spring, one set of counts — read two
-/// ways: a drum laid across the strip above the row, or that same drum stood on its end down
-/// the right-hand edge of the panel. Which one reads better is a matter of hands: some arrive
-/// expecting the shoulders to turn it, some the arrows, and neither is wrong about the object
-/// they are looking at. Rather than choose, both are answered, and swapping which one is
-/// standing is one chord away. Whichever it is, it says the same thing — the letter the cart
-/// under the caret belongs to — because there is only ever one marker.
-///
-/// Persisted to `System/letternav.txt`, the way the display modes and the audio profile are:
-/// a card is one machine, and a preference that came back different after a boot was never set.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
-pub enum LetterNav {
-    /// Across the panel, above the row. What shipped.
-    #[default]
-    Wheel,
-    /// Down the right-hand edge, its letters running the way the side indexes do.
-    Sidebar,
-}
-
-impl LetterNav {
-    /// The one that is not standing.
-    fn other(self) -> Self {
-        match self {
-            LetterNav::Wheel => LetterNav::Sidebar,
-            LetterNav::Sidebar => LetterNav::Wheel,
-        }
-    }
-
-    /// How it is spelled on the card. Anything else in the file is read as the default.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            LetterNav::Wheel => "wheel",
-            LetterNav::Sidebar => "sidebar",
-        }
-    }
-
-    /// Back from how it is spelled on the card, and `None` for anything not spelled either way.
-    pub fn parse(text: &str) -> Option<Self> {
-        match text.trim().to_ascii_lowercase().as_str() {
-            "wheel" => Some(LetterNav::Wheel),
-            "sidebar" => Some(LetterNav::Sidebar),
-            _ => None,
-        }
-    }
-}
-
 pub struct App {
     phase: Phase,
     shelf: Shelf,
-    /// The letter ring over the shelf: where the dial is, and how far it still has to turn.
+    /// The letter strip over the shelf: where the ring stands, and how far it still has to
+    /// travel.
     letters: Letters,
     /// How many carts sit under each of the ring's slots, in `letters::SLOTS` order. Built
     /// once from the scan and never again — the card does not change while slot is running.
-    /// The dial needs it to know which letters are worth stopping on, and which are drawn dim.
+    /// The strip needs it to know which letters are worth stopping on, and which are drawn dim.
     letter_counts: [usize; letters::N],
-    /// One small face per slot, in that order with the size each was rasterised at, the housing
-    /// the drum shows through, and the ridge that joins two of its facets. Uploaded at boot:
-    /// 27 letters of a fixed alphabet is less work than one cart face.
+    /// One small face per slot, in that order with the size each was rasterised at. Uploaded at
+    /// boot: 27 letters of a fixed alphabet is less work than one cart face.
+    ///
+    /// The band the letters stand in is not here at all: it is the machine's own, and
+    /// `slot_chrome::draw_top_band` draws it from the cart bay's numbers every frame.
     letter_faces: Vec<(TexId, u32, u32)>,
-    letter_capsule_face: Option<(TexId, u32, u32)>,
-    letter_ridge_face: Option<TexId>,
-    /// Which of the two dials is standing. Both read the same `Letters`, so it decides how the
-    /// ring is drawn and nothing about what it says.
-    letter_nav: LetterNav,
+    /// The one piece of metal the strip repeats between two letters, with its own size.
+    /// Uploaded beside the letters because it is the same kind of thing: fixed, tiny, and
+    /// needed on the shelf from the first frame.
+    letter_ridge_face: Option<(TexId, u32, u32)>,
     /// When A went down on the shelf, and `None` the rest of the time. The hold lives here
     /// rather than in the gesture layer because A is the GBA's A button everywhere else, and
     /// `Gestures` is deliberately blind to which screen is up.
@@ -753,6 +719,11 @@ pub struct App {
     /// Set when a row is toggled inside the table, so `Session` knows to re-push the list to
     /// the core after `apply` returns (the table itself cannot reach the emulator).
     cheats_dirty: bool,
+    /// Set when the light/dark mode has moved under the binary's feet. Everything on this side
+    /// of the palette — the case, the scrim, the gauge, the bar — follows the mode by itself,
+    /// because it is drawn as filled quads. Everything *baked* does not, and this flag is how
+    /// the app says so: `Frontend` takes it and re-rasterises.
+    mode_dirty: bool,
     /// How far up the game layer's own screen is. Not a phase: it outlives the insert, since
     /// the cart is home and the chrome is still on screen while the picture arrives.
     screen: f32,
@@ -801,9 +772,7 @@ impl App {
             letters: Letters::new(),
             letter_counts,
             letter_faces: Vec::new(),
-            letter_capsule_face: None,
             letter_ridge_face: None,
-            letter_nav: LetterNav::default(),
             play_held: None,
             refusal: None,
             refused_from: None,
@@ -857,6 +826,7 @@ impl App {
             cheat_face_stem: None,
             cheat_empty_face: None,
             cheats_dirty: false,
+            mode_dirty: false,
             screen: 0.0,
             game_ready: false,
             clock: 0.0,
@@ -903,8 +873,11 @@ impl App {
         let modes = crate::root::display_modes(root);
         app.display = DisplayFilter::new(lcd3x, nocolor_cc, modes);
         app.audio = crate::root::audio_profile(root);
-        app.letter_nav = crate::root::letter_nav(root);
         app.state = read_slot_state(root);
+        // The palette, before anything has been rasterised: every face on the device is baked
+        // with the ink burned into it, so the mode has to be in place before the first one, not
+        // after. Anything later than this line is a light-mode device drawn in dark type.
+        slot_ui::palette::set_mode(app.state.mode);
         if app.state.clock_set {
             app.start();
         } else {
@@ -928,9 +901,8 @@ impl App {
         self.display.applied_cc()
     }
 
-    /// The gamma the current colour correction should run at: FULLCOLOR (0) and NOCOLOR (2) stay
-    /// at 1.0, multiplying in the encoded space as before, while HALFCOLOR (1) and the four
-    /// tinted backlights (3..=6) use `CC_GAMMA` and are done in linear.
+    /// 当前色彩校正该用的 gamma：FULLCOLOR(0)/NOCOLOR(2) 保持 1.0（编码空间，旧行为），
+    /// 半彩(1) 与四档单色背光(3..=6) 用 `CC_GAMMA` 在线性空间里做。
     pub fn display_cc_gamma(&self) -> f32 {
         match self.display.cc_mode {
             0 | 2 => 1.0,
@@ -983,22 +955,6 @@ impl App {
         }
     }
 
-    /// SELECT+START on the shelf: stand up the other dial and persist the choice to
-    /// `System/letternav.txt`.
-    fn toggle_letter_nav(&mut self) {
-        self.letter_nav = self.letter_nav.other();
-        if let Some(root) = &self.root {
-            crate::root::write_letter_nav(root, self.letter_nav);
-        }
-        // The library does not move — no cart changes place and no letter gains a game — so the
-        // press is answered only by the thing it changed, and that is the line.
-        let said = match self.letter_nav {
-            LetterNav::Wheel => Toast::NavWheel,
-            LetterNav::Sidebar => Toast::NavSidebar,
-        };
-        self.hud.toast(said, self.now());
-    }
-
     /// Into the slot or onto the shelf. Reached on boot once the clock is known, and from
     /// the clock screen when it becomes known.
     fn start(&mut self) {
@@ -1030,8 +986,8 @@ impl App {
             // the next seat rewrites it, and a boot is the worst moment to need a write.
             None => self.state.cart = None,
         }
-        // The dial starts on the letter of whatever the row is showing. Snapped rather than
-        // turned to: there is no previous position at a boot, and a strip arriving from `#`
+        // The strip starts on the letter of whatever the row is showing. Snapped rather than
+        // travelled to: there is no previous position at a boot, and a strip arriving from `#`
         // would be the shelf's first movement being one nobody made.
         if let Some(cart) = self.shelf.carts.get(self.shelf.index) {
             self.letters.snap_to(cart.initial);
@@ -1101,7 +1057,15 @@ impl App {
     /// rather than one that scrolls into nothing.
     fn about_scroll_max(&self) -> f32 {
         let rows: f32 = self.shortcut_rows.iter().map(|(_, _, h)| *h as f32).sum();
-        let end = about_first_y() + rows + ABOUT_PAD;
+        // The last row has to come to rest clear of the pinned hint's band, not under it, so the
+        // room below the rows is the band's whole height. Falls back to `ABOUT_PAD` before the
+        // hint is up, which is a card that does not move rather than one that scrolls into
+        // nothing.
+        let foot = self
+            .shortcut_hint
+            .map(|(_, _, h)| h as f32)
+            .unwrap_or(ABOUT_PAD);
+        let end = about_first_y() + rows + foot;
         (end - OUT_H as f32).max(0.0)
     }
 
@@ -1111,6 +1075,12 @@ impl App {
 
     pub fn set_cart_shadow(&mut self, face: TexId) {
         self.shelf.set_shadow(face);
+    }
+
+    /// The blank cart a cart whose own face is not built yet is drawn as. Uploaded at boot,
+    /// with the shadow: it is the same for every cart and never changes.
+    pub fn set_cart_placeholder(&mut self, face: TexId) {
+        self.shelf.set_placeholder(face);
     }
 
     pub fn set_wallpaper(&mut self, face: TexId) {
@@ -1176,23 +1146,22 @@ impl App {
         self.letter_faces = faces;
     }
 
-    /// The ridge between two facets of the drum, one texture for every one of them: they differ
-    /// only in where they are and how far they have turned.
-    pub fn set_letter_ridge_face(&mut self, face: TexId) {
-        self.letter_ridge_face = Some(face);
+    /// The metal between two letters, with the size it was rasterised at — a face cropped to
+    /// its ink is as wide as it is and no wider, so the size has to travel with the id the same
+    /// way a letter's does.
+    pub fn set_letter_ridge_face(&mut self, ridge: (TexId, u32, u32)) {
+        self.letter_ridge_face = Some(ridge);
     }
 
-    /// The stadium the strip sits in, with its size.
-    pub fn set_letter_capsule_face(&mut self, face: TexId, w: u32, h: u32) {
-        self.letter_capsule_face = Some((face, w, h));
-    }
-
-    /// Up or down on the shelf: move the dial one letter and bring the row with it.
+    /// Left or right on the shelf: move the index one letter and bring the row with it.
     ///
-    /// The ring keeps the repeat, so this is the press and nothing else. The caret is seated
-    /// on the first cart of the letter it landed on — that is the whole point of the dial —
-    /// and it is seated *short*, so the row flips back through the last few carts into place
-    /// instead of the spring having to cross however many hundred carts the jump covered.
+    /// The ring keeps the repeat, so this is the press and nothing else. The caret is seated on
+    /// the first cart of the letter it landed on — that is the whole point of the index — and
+    /// the row is handed the move as a glide, so it sweeps across every cart it is skipping
+    /// rather than arriving as if only one had moved.
+    ///
+    /// `by` is the direction of the step: +1 for right (the next letter), -1 for left (the
+    /// previous one).
     fn step_letters(&mut self, by: i32, now: Millis) {
         let counts = self.letter_counts;
         if !self.letters.hold(by, now, &counts) {
@@ -1209,8 +1178,11 @@ impl App {
         }
     }
 
-    /// Puts the caret on the first cart of the letter the dial is showing, and puts the row
-    /// just behind it so the spring plays the move.
+    /// Puts the caret on the first cart of the letter the strip is showing, and hands the row
+    /// the move as a glide so it sweeps across every cart it is skipping rather than flicking
+    /// through only the last one. The direction is the row's own to take — it is a ring, and
+    /// the glide runs to the nearest image of the chosen cart — so the strip and the row agree
+    /// about which way is "onward" without this having to say so.
     fn seat_on_letter(&mut self) {
         let slot = self.letters.target();
         let Some(i) = self
@@ -1219,15 +1191,15 @@ impl App {
             .iter()
             .position(|c| letters::slot_of(c.initial) == slot)
         else {
-            // A slot the dial can only have reached by being counted as non-empty, so this is
-            // unreachable; the next frame's `centre_on` puts the dial back if it ever happens.
+            // A slot the strip can only have reached by being counted as non-empty, so this is
+            // unreachable; the next frame's `centre_on` puts it back if it ever happens.
             return;
         };
         self.shelf.index = i;
         // A held arrow key is a direction the shelf is no longer travelling in, and leaving
         // it armed would fire a cart step over the letter that was just chosen.
         self.shelf.release_hold();
-        self.shelf.seat_short_of(LETTER_SEAT_SHORT);
+        self.shelf.glide_to_target();
     }
 
     /// Handed over when the core is spawned, which is on the way into the slot.
@@ -1552,30 +1524,22 @@ impl App {
                 // else. See `Action::AudioProfileNext`.
                 Action::AudioProfileNext if self.core_picker.is_none() => self.cycle_audio(true),
                 Action::AudioProfilePrev if self.core_picker.is_none() => self.cycle_audio(false),
-                // SELECT+START swaps which dial is standing. START alone is already this screen's
-                // core picker, which is the only reason it pairs with something: with SELECT held
-                // the shoulders are save and load, the arrows are the levels, and those are the
-                // four combinations anyone reaching for a second key has already tried.
-                Action::LetterNavToggle if self.core_picker.is_none() => self.toggle_letter_nav(),
+                // SELECT+START. The shelf, like the audio profile and for a weaker reason: the
+                // case and the index are what the mode reprints, and both of them are here. It
+                // is answered on this screen and nowhere else, so the press does nothing under
+                // the picker's open lid — where the band is not drawn either.
+                Action::ModeToggle if self.core_picker.is_none() => self.toggle_mode(),
                 // Ahead of the shelf's own movement, so an open picker takes the arrows
                 // before the row of carts underneath it does.
                 _ if self.core_picker.is_some() => self.core_picker_input(action),
                 Action::ShelfLeft | Action::GbaDown(Btn::Left) => self.shelf.hold_left(now),
                 Action::ShelfRight | Action::GbaDown(Btn::Right) => self.shelf.hold_right(now),
-                // Up and down are the letter ring, and they are the only thing on this screen
-                // that uses them: the row is left and right, and SELECT turns up and down
-                // into brightness, which `adjust` answers before any of this is reached. So
-                // the dial costs no button and needs no mode — the strip is already on screen
-                // showing which letter the caret is on, and the arrow simply moves it.
-                Action::GbaDown(Btn::Up) => self.step_letters(-1, now),
-                Action::GbaDown(Btn::Down) => self.step_letters(1, now),
-                Action::GbaUp(Btn::Up) => self.letters.release(-1),
-                Action::GbaUp(Btn::Down) => self.letters.release(1),
-                // L and R step it as well, which is the pair a dial lying across the panel asks
-                // for: they are either end of it. Neither is claimed here otherwise — on their
-                // own they are the GBA's own L and R and there is no core under this screen to
-                // want them — and answering all four keys is what keeps the other view from
-                // having a key that does nothing, whichever one the user is looking at.
+                // L and R are the whole of the index, and the only pair of keys that could be:
+                // they are either end of the strip printed across the top of the case, and on
+                // their own they are the GBA's own shoulders with no core under this screen to
+                // want them. The arrows are the *row's* — left and right walk the carts and up
+                // and down mean nothing up there — and SELECT turns up and down into
+                // brightness, which `adjust` answers before any of this is reached.
                 Action::GbaDown(Btn::L1) => self.step_letters(-1, now),
                 Action::GbaDown(Btn::R1) => self.step_letters(1, now),
                 Action::GbaUp(Btn::L1) => self.letters.release(-1),
@@ -1874,7 +1838,7 @@ impl App {
             // The card closes on where the last press asked it to go rather than arriving there
             // between two frames: a page of text that changed while the eye was mid-line is a
             // page that has to be found again. `want` is the press and `scroll` is the picture,
-            // which is the same split the letter dial keeps.
+            // which is the same split the letter strip keeps.
             Phase::About { scroll, want } => {
                 if (*want - *scroll).abs() < 0.5 {
                     *scroll = *want;
@@ -1885,13 +1849,14 @@ impl App {
             }
             _ => None,
         };
-        // The dial, after the row has moved rather than as part of it. Out here because it
+        // The strip, after the row has moved rather than as part of it. Out here because it
         // needs the whole of `self` — the repeat reaches the caret, which is the shelf's — and
         // the match above is holding `phase` borrowed. The order within it is the order the
-        // three things depend on each other: the repeat may move the dial, the spring may move
-        // it further, and the last line puts the marker back on the cart the row is actually
-        // showing. That last line is what makes the strip a readout as well as a control — an
-        // arrow on the row moves the caret and the dial follows it with nothing telling it to.
+        // three things depend on each other: the repeat may move the marker, the spring may
+        // move it further, and the last line puts the marker back on the cart the row is
+        // actually showing. That last line is what makes the strip a readout as well as a
+        // control — an arrow on the row moves the caret and the strip follows it with nothing
+        // telling it to.
         if self.on_shelf() {
             self.repeat_letters(now);
             if let Some(cart) = self.shelf.carts.get(self.shelf.index) {
@@ -2137,6 +2102,10 @@ impl App {
             }
             return;
         }
+        // Whether the letter band went down this frame. The HUD reads it to place its plate: the
+        // band is only on the shelf, and it is the one phase where the top of the screen is not
+        // free for a plate to sit against.
+        let mut band_on = false;
         match &self.phase {
             // Nothing else is on screen and nothing goes over it, the HUD included: the
             // levels are unreachable here and there is no game to say anything about.
@@ -2167,27 +2136,25 @@ impl App {
                     }
                     _ => {
                         self.shelf.draw(self.shelf_shake(), out);
-                        // Whichever dial is standing goes over the row: in the strip the row
-                        // leaves above itself when it lies across the panel, down the right-hand
-                        // edge when it stands on its end. Not drawn while the picker has the lid
-                        // off: a dial is a readout of where the caret is in the library, and with
-                        // a cart open there is no library on screen for it to be somewhere in.
-                        match self.letter_nav {
-                            LetterNav::Wheel => self.letters.draw(
-                                self.letter_capsule_face,
-                                &self.letter_faces,
-                                &self.letter_counts,
-                                self.letter_ridge_face,
-                                out,
-                            ),
-                            LetterNav::Sidebar => self.letters.draw_rail(
-                                self.letter_capsule_face,
-                                &self.letter_faces,
-                                &self.letter_counts,
-                                self.letter_ridge_face,
-                                out,
-                            ),
-                        }
+                        // The band at the top of the case, and the index printed along it. The
+                        // band is the machine's — the cart bay's mirror, drawn from the bay's
+                        // own numbers — so it goes down as furniture and the letters go over
+                        // it. Not drawn while the picker has the lid off: the index says where
+                        // in the library the caret is, and with a cart open there is no
+                        // library on screen for it to be somewhere in.
+                        draw_top_band(out);
+                        // The light off both bands of the case, drawn with the band because the
+                        // two boundaries are the same object seen at the top and the bottom of
+                        // the screen. After the row, so a cart on its way into the slot is lit
+                        // by it rather than drawn over it.
+                        draw_edge_glow(out);
+                        band_on = true;
+                        self.letters.draw_strip(
+                            &self.letter_faces,
+                            self.letter_ridge_face,
+                            &self.letter_counts,
+                            out,
+                        );
                     }
                 }
                 // After the row and before the case: it names what the row is showing, so it
@@ -2202,11 +2169,15 @@ impl App {
                         alpha: 1.0,
                     });
                 }
-                draw_footer(
+                // Last of the shelf's own furniture, because it is printed on the band the
+                // letters are cut into and belongs over it: the clock at one end of the case
+                // and the battery at the other, both clear of the window between them.
+                draw_status(
                     self.battery,
                     self.battery_percent,
                     self.bolt,
                     self.shelf_clock,
+                    self.hud.face(Icon::of_mode(slot_ui::palette::mode())),
                     out,
                 );
             }
@@ -2230,7 +2201,11 @@ impl App {
                 // Pinned. It is the line that says the rest of the card moves, so it cannot be
                 // the thing that moves.
                 if let Some((_, _, h)) = self.shortcut_hint {
-                    draw_shortcut_row(self.shortcut_hint, OUT_H as f32 - h as f32 - ABOUT_PAD, out);
+                    // The band, then the line on it. The band is the panel's and the line is the
+                    // card's, so they are laid from two different widths.
+                    let top = OUT_H as f32 - h as f32;
+                    draw_hint_bar(top, out);
+                    draw_shortcut_row(self.shortcut_hint, top, out);
                 }
                 return;
             }
@@ -2299,7 +2274,13 @@ impl App {
             self.draw_game_menu(menu, out);
         }
         // Over everything, in every phase. The bar is never what the user is looking at.
-        self.hud.draw(self.now(), out);
+        //
+        // The plate hangs under the letter band on the shelf and from the top of the screen
+        // everywhere else, which is the one thing about the HUD a phase gets to decide: the band
+        // is only on the shelf, and covering it with a plate would hide the index and the clock
+        // for the second and a half a level is up.
+        let plate_top = if band_on { PLATE_Y } else { 0.0 };
+        self.hud.draw(self.now(), plate_top, out);
     }
 
     pub fn screen_shake(&self) -> f32 {
@@ -2966,6 +2947,32 @@ impl App {
     /// has re-sent the list, because the table cannot reach the emulator itself.
     pub(crate) fn take_cheats_dirty(&mut self) -> bool {
         std::mem::take(&mut self.cheats_dirty)
+    }
+
+    /// Whether the mode moved since the last frame, and clears it. The binary takes this every
+    /// frame the way it takes `take_cheats_dirty`: the palette is a global and the textures are
+    /// not, so the one thing that has to be told is whoever owns the textures.
+    pub(crate) fn take_mode_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.mode_dirty)
+    }
+
+    /// SELECT+START: print the device the other way round.
+    ///
+    /// Three things, and the order is the order they have to happen in. The palette moves
+    /// first, so that every quad drawn from here on — this frame included — is already the new
+    /// colour. The state file follows, so a device switched off a second later comes back the
+    /// way it was left. And the flag goes up last, because it is a request to someone else and
+    /// nothing about this frame depends on the answer.
+    ///
+    /// The mode is a *setting* rather than a screen, and it is written through the same door
+    /// the levels use, so a device switched off a second after the press comes back the way it
+    /// was left rather than the way it booted.
+    pub(crate) fn toggle_mode(&mut self) {
+        let mode = slot_ui::palette::mode().other();
+        slot_ui::palette::set_mode(mode);
+        self.state.mode = mode;
+        self.mode_dirty = true;
+        self.persist();
     }
 
     /// SELECT+A over a running game. Opens the table — the "see the whole list and pick" screen
@@ -3661,8 +3668,8 @@ impl App {
             return None;
         }
         match self.pending.as_ref()?.0 {
-            PendingUndo::Save { .. } => Some("撤销存档"),
-            PendingUndo::Load { .. } => Some("撤销读取"),
+            PendingUndo::Save { .. } => Some(lang::UNDO_SAVE),
+            PendingUndo::Load { .. } => Some(lang::UNDO_LOAD),
         }
     }
 

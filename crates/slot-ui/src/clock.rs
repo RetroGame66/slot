@@ -3,6 +3,7 @@ use slot_store::{
     civil_from_days, days_from_civil, days_in_month, parse_stamp, UTC_OFFSET_MAX, UTC_OFFSET_MIN,
 };
 
+use crate::palette;
 use crate::plate::{blit, hint_width, UndoFace, HINT_H};
 use crate::text;
 
@@ -13,9 +14,6 @@ const DAY: i64 = 86_400;
 /// to the nearest end rather than left where it cannot be moved from.
 const YEAR_MIN: i64 = 2000;
 const YEAR_MAX: i64 = 2099;
-
-const INK: [u8; 3] = [0xf6, 0xf4, 0xef];
-const BACKDROP: [f32; 4] = [0.06, 0.06, 0.07, 1.0];
 
 /// The step the offset moves by. Half an hour rather than a whole one because India, Iran and
 /// half of Australia are on the halves, and Nepal and the Chathams are on the quarters they
@@ -41,7 +39,7 @@ const CARET_GAP: f32 = 6.0;
 const HINT_DROP: f32 = 48.0;
 
 const SET_CLOCK_KEY: &str = "A";
-const SET_CLOCK_LABEL: &str = "设置时钟";
+const SET_CLOCK_LABEL: &str = crate::lang::SET_CLOCK_LABEL;
 
 /// Hours and minutes off a ring stamp. Never seconds: a clock showing them is a clock being
 /// watched rather than glanced at.
@@ -212,7 +210,7 @@ impl ClockPicker {
             let mut buf = vec![0u8; (cell * PICKER_H * 4) as usize];
             if let Some(font) = text::label_font() {
                 let layout = text::fit(font, &text, *cell as f32, 1, PICKER_PX, PICKER_MIN_PX);
-                text::draw_centred(&mut buf, *cell, PICKER_H, &layout, INK);
+                text::draw_centred(&mut buf, *cell, PICKER_H, &layout, palette::ink());
             }
             blit(&mut rgba, w, &buf, *cell, PICKER_H, cell_x(i), 0);
         }
@@ -250,7 +248,7 @@ impl ClockPicker {
             y: 0.0,
             w: OUT_W as f32,
             h: OUT_H as f32,
-            colour: BACKDROP,
+            colour: palette::panel(),
         });
         let w = picker_w() as f32;
         let x = (OUT_W as f32 - w) / 2.0;
@@ -271,12 +269,7 @@ impl ClockPicker {
             y: y + PICKER_H as f32 + CARET_GAP,
             w: CELLS[cell] as f32,
             h: CARET_H,
-            colour: [
-                INK[0] as f32 / 255.0,
-                INK[1] as f32 / 255.0,
-                INK[2] as f32 / 255.0,
-                1.0,
-            ],
+            colour: palette::ink_f(),
         });
         if let Some(tex) = hint {
             let hw = hint_width(SET_CLOCK_KEY, SET_CLOCK_LABEL) as f32;

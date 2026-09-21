@@ -1,7 +1,9 @@
 mod common;
 
 use common::tmp_root;
-use slot_store::{atomic_write, read_slot_state, write_slot_state, SlotState, BRIGHTNESS_MAX};
+use slot_store::{
+    atomic_write, read_slot_state, write_slot_state, Mode, SlotState, BRIGHTNESS_MAX,
+};
 use tempfile::tempdir;
 
 #[test]
@@ -37,9 +39,48 @@ fn slot_state_round_trips_including_a_stem_with_an_equals_sign() {
         muted: true,
         clock_set: true,
         utc_offset_min: 0,
+        mode: Mode::Light,
     };
     write_slot_state(d.path(), &s).unwrap();
     assert_eq!(read_slot_state(d.path()), s);
+}
+
+/// The mode is the one field a card written before it existed can be missing, so it is the one
+/// field whose absence has to read as something other than corruption. Everything else about
+/// such a file is still strict — see `a_slot_state_missing_a_key_reads_as_default_not_half_populated`
+/// for the other half of that rule.
+#[test]
+fn a_state_file_from_before_the_mode_reads_as_dark_and_keeps_the_rest() {
+    let d = tmp_root();
+    std::fs::write(
+        d.path().join("System/slot.state"),
+        "cart=Emerald\nbrightness=7\nblue_light=2\nvolume=44\nmuted=1\nclock_set=1\nutc_offset_min=120\n",
+    )
+    .unwrap();
+    let s = read_slot_state(d.path());
+    assert_eq!(s.mode, Mode::Dark, "an older card did not come up dark");
+    assert_eq!(
+        s.cart.as_deref(),
+        Some("Emerald"),
+        "the cart was thrown away"
+    );
+    assert_eq!(s.brightness, 7);
+    assert_eq!(s.volume, 44);
+    assert_eq!(s.utc_offset_min, 120);
+}
+
+/// And a mode this build cannot read is corruption like any other word it cannot read: the
+/// strictness is there to catch a file someone has been editing, and a third mode is exactly
+/// that.
+#[test]
+fn a_mode_that_is_not_a_mode_reads_as_default() {
+    let d = tmp_root();
+    std::fs::write(
+        d.path().join("System/slot.state"),
+        "cart=Emerald\nbrightness=7\nblue_light=2\nvolume=44\nmuted=1\nclock_set=1\nutc_offset_min=0\nmode=sepia\n",
+    )
+    .unwrap();
+    assert_eq!(read_slot_state(d.path()), SlotState::default());
 }
 
 #[test]
@@ -114,6 +155,7 @@ fn slot_state_round_trips_a_negative_utc_offset() {
         muted: false,
         clock_set: true,
         utc_offset_min: -450,
+        mode: Mode::Dark,
     };
     write_slot_state(d.path(), &s).unwrap();
     assert_eq!(read_slot_state(d.path()).utc_offset_min, -450);

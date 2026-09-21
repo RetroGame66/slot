@@ -19,8 +19,8 @@ pub use pinyin::initial;
 pub use ring::{StateEntry, StateRing, RING_MAX};
 pub use scan::{is_hidden, scan, scan_cached, Cart, StoreError};
 pub use slot_state::{
-    read_slot_state, write_slot_state, SlotState, BLUE_LIGHT_MAX, BRIGHTNESS_MAX, UTC_OFFSET_MAX,
-    UTC_OFFSET_MIN, VOLUME_MAX,
+    read_slot_state, write_slot_state, Mode, SlotState, BLUE_LIGHT_MAX, BRIGHTNESS_MAX,
+    UTC_OFFSET_MAX, UTC_OFFSET_MIN, VOLUME_MAX,
 };
 pub use stamp::{
     civil_from_days, days_from_civil, days_in_month, format_stamp, parse_stamp, stamp_now,

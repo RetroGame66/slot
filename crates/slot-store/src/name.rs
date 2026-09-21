@@ -156,7 +156,6 @@ pub fn init_label_config(root: &Path) {
         if let Some(rest) = line.strip_prefix("strip_tags") {
             let token = rest
                 .trim_start_matches('=')
-                .trim()
                 .split_whitespace()
                 .next()
                 .unwrap_or("");
@@ -178,7 +177,10 @@ mod tests {
     fn stripped_is_the_classic_behaviour() {
         // No init call -> default strip = true.
         assert_eq!(clean_label("Spider-Man 2 (USA)"), "Spider-Man 2");
-        assert_eq!(clean_label("Pokemon - Ruby Version (USA, Europe) (Rev 2)"), "Pokemon Ruby Version");
+        assert_eq!(
+            clean_label("Pokemon - Ruby Version (USA, Europe) (Rev 2)"),
+            "Pokemon Ruby Version"
+        );
         assert_eq!(clean_label("[中]魂斗罗"), "魂斗罗");
         assert_eq!(clean_label("(USA) (Rev 1)"), "(USA) (Rev 1)");
         assert_eq!(clean_label(""), "");
@@ -187,15 +189,20 @@ mod tests {
     #[test]
     fn stripped_variant_always_strips() {
         assert_eq!(clean_label_stripped("[中]魂斗罗"), "魂斗罗");
-        assert_eq!(clean_label_stripped("Wario Land 4 - Time Attack"), "Wario Land 4 Time Attack");
+        assert_eq!(
+            clean_label_stripped("Wario Land 4 - Time Attack"),
+            "Wario Land 4 Time Attack"
+        );
     }
 
     #[test]
     fn keep_mode_preserves_tags() {
         set_strip_tags(false);
         assert_eq!(clean_label("[中]魂斗罗"), "[中]魂斗罗");
-        assert_eq!(clean_label("Pokemon - Ruby Version (USA, Europe) (Rev 2)"),
-                   "Pokemon - Ruby Version (USA, Europe) (Rev 2)");
+        assert_eq!(
+            clean_label("Pokemon - Ruby Version (USA, Europe) (Rev 2)"),
+            "Pokemon - Ruby Version (USA, Europe) (Rev 2)"
+        );
         assert_eq!(clean_label("  [日]  超级马里奥   "), "[日] 超级马里奥");
         // restore default for any later test in this process
         set_strip_tags(true);

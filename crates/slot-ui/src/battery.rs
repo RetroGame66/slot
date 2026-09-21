@@ -1,38 +1,53 @@
 use slot_gfx::{Draw, TexId};
 use slot_power::{Battery, Charge};
 
-use crate::footer::Printed;
-use crate::hud::HUD_INK;
+use crate::palette;
 use crate::plate::HINT_H;
+use crate::status::Printed;
+
+/// The bolt's slot, to the left of the capsule. Squeezed inside the capsule it had an 8 px box
+/// to live in and came out as a smudge, not a bolt, and it punched a hole in whatever fill was
+/// under it. Out here it sits on the housing at a size that actually reads, on the order of the
+/// capsule's own height rather than half of it.
+///
+/// The raster size, not the drawn one: `icon_face` cuts the glyph to its ink and the drawn box
+/// is `BOLT_W` square, so this only has to be big enough for the glyph to be cut from.
+pub const BOLT_PX: f32 = 27.0;
 
 /// The capsule, in the proportions of the thing it is a picture of. Wider than tall, with a
 /// nub on the positive end.
-/// The bolt is sized to the gauge rather than to the HUD row. It sits beside the capsule on
-/// the case band, not among the row's glyphs, so growing the row must not grow it: the slot
-/// reserved for it here is the capsule's height, and a larger bolt would push the gauge
-/// sideways for a control that is not being adjusted.
-pub const BOLT_PX: f32 = 18.0;
-
-pub const GAUGE_W: f32 = 22.0;
-pub const GAUGE_H: f32 = 11.0;
+///
+/// One and a half times the size it was drawn at when it sat at the bottom of the case: it is
+/// now read from the band at the top of the screen, which is where the eye goes for the time,
+/// and a gauge at the old size read as a detail of the band rather than as one of the two
+/// readings on it. The proportions are the old ones to the pixel — 22 × 11 × 1.5 — so nothing
+/// about the picture changed, only its size.
+pub const GAUGE_W: f32 = 33.0;
+pub const GAUGE_H: f32 = 16.5;
 // The doc comment above claims wider than tall; this is what makes that a fact the compiler
 // enforces rather than a sentence someone could quietly falsify by editing one constant.
 const _: () = assert!(GAUGE_H < GAUGE_W);
-const NUB_W: f32 = 2.5;
-const NUB_H: f32 = 4.0;
+const NUB_W: f32 = 3.75;
+const NUB_H: f32 = 6.0;
 /// The wall of the capsule, drawn as four rects rather than an outline: the draw list has
 /// only filled quads. Public so a test can bound the fill against the capsule's own inner
 /// edge instead of trusting a hand-copied number that could drift from this one.
-pub const WALL: f32 = 1.5;
-/// Between the capsule and the number.
-const GAP: f32 = 7.0;
+pub const WALL: f32 = 2.25;
+/// Between the capsule and the number. Tight: the two are one reading, and a number that floated
+/// free of the capsule would be a second thing on the band rather than the capsule's own value.
+const UNDER_GAP: f32 = 1.0;
 
-/// The bolt's own slot, to the left of the capsule. Squeezed inside the capsule it had an 8
-/// px box to live in and came out as a smudge, not a bolt, and it punched a hole in whatever
-/// fill was under it. Out here it sits on the housing (and later a switcher plate) at a size
-/// that actually reads, on the order of the capsule's own height rather than half of it.
-const BOLT_W: f32 = 14.0;
-const BOLT_H: f32 = 14.0;
+/// The whole cluster's height: the capsule with the number under it.
+///
+/// Exported because whoever places the cluster needs it to centre the thing — the caller cannot
+/// work it out from the two constants above without also knowing they stack rather than sit side
+/// by side, which is exactly the decision that changed here.
+pub fn cluster_h() -> f32 {
+    GAUGE_H + UNDER_GAP + HINT_H as f32
+}
+
+const BOLT_W: f32 = 21.0;
+const BOLT_H: f32 = 21.0;
 /// Between the bolt's slot and the capsule.
 const BOLT_GAP: f32 = 5.0;
 // A zero or negative gap would let the bolt's own quad touch or cross into the capsule's,
@@ -41,20 +56,33 @@ const BOLT_GAP: f32 = 5.0;
 // property at runtime, against the actual draw list rather than these numbers.
 const _: () = assert!(BOLT_GAP > 0.0);
 
-const INK: [f32; 4] = [
-    HUD_INK[0] as f32 / 255.0,
-    HUD_INK[1] as f32 / 255.0,
-    HUD_INK[2] as f32 / 255.0,
-    1.0,
-];
+/// Where the capsule's own left wall is, for a cluster anchored at `right`: the tip of the nub
+/// is the anchor, so everything else on the capsule measures back from it.
+///
+/// Public because the tests have to know which quad is the capsule's wall — the number's
+/// placeholder is a `Rect` too, and a hand-copied offset would drift from the layout it is
+/// meant to be checking.
+pub fn capsule_left(right: f32) -> f32 {
+    right - NUB_W - GAUGE_W
+}
 
-/// The capsule, its fill, and the number beside it. `x` and `y` are the top left of the whole
-/// cluster, not the capsule: the bolt's slot is reserved first, unconditionally, so the
-/// capsule and the number sit in the same place whether or not a cable is in. The bolt itself
-/// only ever draws inside that reserved slot, never over the fill.
+/// The capsule, its fill, and the number under it — read from the right, which is the way every
+/// screen in the tree shows it: the clock has the left corner of the band and the battery the
+/// right, so the whole cluster hangs off `right` and the number sits *below* the capsule.
+///
+/// Under rather than beside is the one thing on this band that has changed shape twice. It was
+/// to the right of the capsule when the pair sat at the bottom of the case; moving to the band
+/// put it on the other side so that a right-handed reading met the number first; and it is under
+/// now, which buys back the width the cluster was spending on a number that is at most three
+/// characters, and lets the capsule itself sit closer to the corner it belongs to.
+///
+/// `right` is the outer tip of the nub and `top` is the top of the *cluster* — the capsule's own
+/// top, since the capsule is the upper of the two. The bolt's slot is reserved first,
+/// unconditionally, so the capsule and the number sit in the same place whether or not a cable is
+/// in; the bolt itself only ever draws inside that reserved slot, never over the fill.
 pub fn draw_gauge(
-    x: f32,
-    y: f32,
+    right: f32,
+    top: f32,
     battery: Option<Battery>,
     percent: Printed,
     bolt: Option<TexId>,
@@ -72,14 +100,20 @@ pub fn draw_gauge(
             y,
             w,
             h,
-            colour: INK,
+            colour: palette::ink_f(),
         });
     };
 
     // Held whether or not anything is charging. Making this depend on `b.charge` is exactly
-    // the bug being fixed here in a different shape: the capsule would still jump sideways
-    // the instant a cable went in, just horizontally instead of losing its fill.
-    let cx = x + BOLT_W + BOLT_GAP;
+    // the bug this file exists to prevent, in a different shape: the capsule would still jump
+    // sideways the instant a cable went in, just horizontally instead of losing its fill.
+    let cx = capsule_left(right);
+    let y = top;
+    // The bolt's slot, worked out here rather than only where the bolt is drawn, so the slot is
+    // held empty when there is no cable in. It is the one thing still beside the capsule: it
+    // marks a state of the capsule, not a value of it, and a bolt under the capsule would be in
+    // the space the number has just been given.
+    let bolt_x = cx - BOLT_GAP - BOLT_W;
 
     rect(cx, y, GAUGE_W, WALL, out);
     rect(cx, y + GAUGE_H - WALL, GAUGE_W, WALL, out);
@@ -104,7 +138,7 @@ pub fn draw_gauge(
     // device is charging.
     if let (Charge::Charging, Some(tex)) = (b.charge, bolt) {
         out.push(Draw::Tex {
-            x,
+            x: bolt_x,
             y: y + (GAUGE_H - BOLT_H) / 2.0,
             w: BOLT_W,
             h: BOLT_H,
@@ -114,8 +148,11 @@ pub fn draw_gauge(
     }
 
     if percent.w > 0 {
-        let px = cx + GAUGE_W + NUB_W + GAP;
-        let py = y + (GAUGE_H - HINT_H as f32) / 2.0;
+        // Centred on the capsule's own width, not on the cluster's: the nub is a decoration on
+        // the positive end and centring under the whole thing would put the number a couple of
+        // pixels off the body it names.
+        let px = cx + (GAUGE_W - percent.w as f32) / 2.0;
+        let py = y + GAUGE_H + UNDER_GAP;
         out.push(match percent.face {
             Some(tex) => Draw::Tex {
                 x: px,

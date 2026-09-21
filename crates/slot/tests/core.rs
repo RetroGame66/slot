@@ -63,6 +63,7 @@ fn a_rom_the_real_core_refuses_reports_failed() {
         StubSink::new().ring(),
         None,
         None,
+        slot::audio::Profile::default(),
     );
     let deadline = Instant::now() + Duration::from_secs(5);
     while emu.state() == CoreState::Loading {

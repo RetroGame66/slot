@@ -6,7 +6,7 @@
 //!
 //! GENERATED, and not by hand: the table below is every hanzi in GB2312 plus the ones this
 //! card's titles actually use, each with the first letter of its pinyin, sorted by code point
-//! so a lookup is a binary search. Regenerate rather than edit; `tools/gen_pinyin.py`.
+//! so a lookup is a binary search. Regenerate rather than edit; `slot-工具/gen_pinyin.py`.
 
 /// Every hanzi the table knows, sorted by code point.
 const HANZI: &[char] = &[

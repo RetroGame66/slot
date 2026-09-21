@@ -15,6 +15,50 @@ pub const VOLUME_MAX: u8 = 100;
 pub const UTC_OFFSET_MIN: i16 = -720;
 pub const UTC_OFFSET_MAX: i16 = 840;
 
+/// Which way round the frontend prints itself: light type on dark plastic, or dark type on
+/// light plastic.
+///
+/// It lives here rather than in the ui because it is a setting the card remembers, like the
+/// brightness and the volume, and the ui reads its palette off whatever is in the state file.
+/// A `Mode` owned by the drawing code would have to be mirrored here anyway, and two enums for
+/// one line of text is how a file and a screen come apart.
+#[derive(Copy, Clone, PartialEq, Eq, Default, Debug)]
+pub enum Mode {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl Mode {
+    /// The other one. What SELECT+START does, and the whole of what it does: there is no third
+    /// mode to step through, so a toggle is the honest shape of the control.
+    pub fn other(self) -> Mode {
+        match self {
+            Mode::Dark => Mode::Light,
+            Mode::Light => Mode::Dark,
+        }
+    }
+
+    /// What the state file calls it. Spelled at the definition rather than at either end, so
+    /// the reader and the writer cannot disagree about the word.
+    pub fn word(self) -> &'static str {
+        match self {
+            Mode::Dark => "dark",
+            Mode::Light => "light",
+        }
+    }
+
+    /// Anything else is not a mode. A state file edited on a desktop must not be able to put
+    /// the device into a third one.
+    pub fn from_word(word: &str) -> Option<Mode> {
+        match word.trim().to_ascii_lowercase().as_str() {
+            "dark" => Some(Mode::Dark),
+            "light" => Some(Mode::Light),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SlotState {
     /// Filename stem. `None` is an empty slot, which is the shelf.
@@ -31,6 +75,8 @@ pub struct SlotState {
     /// Minutes to add to the card's UTC to get local time. Zero is a device that never left
     /// Greenwich, which is also what a card that has never been asked reads as.
     pub utc_offset_min: i16,
+    /// Light or dark. The one field whose absence is not an error — see `parse`.
+    pub mode: Mode,
 }
 
 /// Not derived. `read_slot_state` falls back here on a first boot, and all zeroes would
@@ -48,6 +94,7 @@ impl Default for SlotState {
             muted: false,
             clock_set: false,
             utc_offset_min: 0,
+            mode: Mode::Dark,
         }
     }
 }
@@ -66,20 +113,30 @@ pub fn read_slot_state(root: &Path) -> SlotState {
 
 pub fn write_slot_state(root: &Path, s: &SlotState) -> std::io::Result<()> {
     let text = format!(
-        "cart={}\nbrightness={}\nblue_light={}\nvolume={}\nmuted={}\nclock_set={}\nutc_offset_min={}\n",
+        "cart={}\nbrightness={}\nblue_light={}\nvolume={}\nmuted={}\nclock_set={}\nutc_offset_min={}\nmode={}\n",
         s.cart.as_deref().unwrap_or(""),
         s.brightness,
         s.blue_light,
         s.volume,
         s.muted as u8,
         s.clock_set as u8,
-        s.utc_offset_min
+        s.utc_offset_min,
+        s.mode.word()
     );
     atomic_write(&state_path(root), text.as_bytes())
 }
 
 /// All or nothing. A file we only half recognise is not one we wrote, and inheriting the
 /// missing fields from the defaults would hide the corruption behind plausible values.
+///
+/// `mode` is the one exception, and deliberately: every card in the field has a state file
+/// written before the mode existed, and under the rule above the first boot of a binary that
+/// knows about it would throw the whole file away — the cart the user left selected, the
+/// brightness they set, the timezone they confirmed. Strictness here exists to catch a file
+/// that has been corrupted, not to punish one that is merely older, and a missing mode has
+/// exactly one sensible reading: dark, which is what the device did before it could be
+/// anything else. Every *other* key is still all-or-nothing, including one this build has
+/// never heard of.
 fn parse(text: &str) -> Option<SlotState> {
     let mut cart = None;
     let mut brightness = None;
@@ -88,6 +145,7 @@ fn parse(text: &str) -> Option<SlotState> {
     let mut muted = None;
     let mut clock_set = None;
     let mut utc_offset_min = None;
+    let mut mode = None;
     for line in text.lines().filter(|l| !l.is_empty()) {
         let (key, value) = line.split_once('=')?;
         match key {
@@ -98,6 +156,10 @@ fn parse(text: &str) -> Option<SlotState> {
             "muted" => muted = Some(level(value, 1)? == 1),
             "clock_set" => clock_set = Some(level(value, 1)? == 1),
             "utc_offset_min" => utc_offset_min = Some(offset(value)?),
+            // Written by this build and unreadable in it is still corruption: a misspelt word
+            // here means someone has been editing the file, and the defaults are the safe
+            // answer for the rest of it too.
+            "mode" => mode = Some(Mode::from_word(value)?),
             _ => return None,
         }
     }
@@ -110,6 +172,7 @@ fn parse(text: &str) -> Option<SlotState> {
         muted: muted?,
         clock_set: clock_set?,
         utc_offset_min: utc_offset_min?,
+        mode: mode.unwrap_or_default(),
     })
 }
 

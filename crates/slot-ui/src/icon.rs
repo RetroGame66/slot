@@ -23,10 +23,17 @@ pub enum Icon {
     Rewind,
     Alert,
     Charging,
+    /// The two the status line carries: which way round the frontend is printed, shown beside
+    /// the clock. Filled Material glyphs rather than the outline ones `Brightness` and
+    /// `BlueLight` use, so the reading on the band is never mistaken for one of the levels on
+    /// the bar — the level icons are a control the user just moved, and this is a state of the
+    /// screen that has been sitting there all along.
+    Sun,
+    Moon,
 }
 
 impl Icon {
-    pub const ALL: [Icon; 10] = [
+    pub const ALL: [Icon; 12] = [
         Icon::Volume,
         Icon::VolumeZero,
         Icon::VolumeMuted,
@@ -37,6 +44,8 @@ impl Icon {
         Icon::Rewind,
         Icon::Alert,
         Icon::Charging,
+        Icon::Sun,
+        Icon::Moon,
     ];
 
     /// Position in `ALL`, which is the order faces are uploaded in. Sound only while `ALL` is
@@ -62,21 +71,37 @@ impl Icon {
             Icon::FastForwardLatched => '\u{f0211}',
             Icon::Rewind => '\u{f04a}',
             Icon::Alert => '\u{f0026}',
-            // Inside the capsule rather than beside it, so the gauge and the percent never
-            // move when a cable goes in.
+            // Beside the capsule, in a slot the gauge reserves whether or not a cable is in,
+            // so the gauge and the percent never move when one goes in.
             Icon::Charging => '\u{f0e7}',
+            Icon::Sun => '\u{f0599}',
+            Icon::Moon => '\u{f0594}',
+        }
+    }
+
+    /// The glyph for a mode: the sun while the frontend is light and the moon while it is
+    /// dark, because the icon names the mode the device is *in* rather than the one a press
+    /// would move it to. A phone's status bar does the same, and for the same reason: the
+    /// reading is a state, and the control is the press that changes it.
+    pub fn of_mode(mode: crate::palette::Mode) -> Icon {
+        match mode {
+            crate::palette::Mode::Dark => Icon::Moon,
+            crate::palette::Mode::Light => Icon::Sun,
         }
     }
 }
 
-/// A one pixel dark halo, dilated out of the coverage itself. Glyphs and toasts are drawn
-/// over a live game frame and neither sits on a plate, so each carries its own contrast.
-const HALO: [u8; 3] = [0x08, 0x08, 0x0a];
+/// A one pixel halo, dilated out of the coverage itself. Glyphs and toasts are drawn
+/// over a live game frame and neither sits on a plate, so each carries its own contrast — the
+/// same colour as the type is not, which is what `palette::halo` is for: a light glyph needs a
+/// dark outline against a bright frame and a dark one needs a light outline, and the mode
+/// decides which of those two the screen is.
 pub const HALO_PX: u32 = 1;
 
 /// Tints a coverage map and puts the halo behind it. `HALO_PX` wider and taller on every
 /// side than the coverage it is given, so the dilation has somewhere to go.
 pub fn haloed(cov: &[u8], cw: u32, ch: u32, colour: [u8; 3]) -> CartFace {
+    let halo_ink = crate::palette::halo();
     let pad = HALO_PX as usize;
     let (cw, ch) = (cw as usize, ch as usize);
     let (w, h) = (cw + 2 * pad, ch + 2 * pad);
@@ -106,13 +131,13 @@ pub fn haloed(cov: &[u8], cw: u32, ch: u32, colour: [u8; 3]) -> CartFace {
                 let inv = 255 - a;
                 let mix = |c: u8, s: u8| ((c as u32 * a + s as u32 * inv) / 255) as u8;
                 rgba.extend_from_slice(&[
-                    mix(colour[0], HALO[0]),
-                    mix(colour[1], HALO[1]),
-                    mix(colour[2], HALO[2]),
+                    mix(colour[0], halo_ink[0]),
+                    mix(colour[1], halo_ink[1]),
+                    mix(colour[2], halo_ink[2]),
                     ink.max(halo),
                 ]);
             } else {
-                rgba.extend_from_slice(&[HALO[0], HALO[1], HALO[2], halo]);
+                rgba.extend_from_slice(&[halo_ink[0], halo_ink[1], halo_ink[2], halo]);
             }
         }
     }

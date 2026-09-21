@@ -22,7 +22,7 @@ use slot::session::Session;
 use slot_input::{Action, Btn, Millis, RawEvent};
 use slot_retro::ButtonMask;
 use slot_store::{write_slot_state, Core, SlotState};
-use slot_ui::{opening, Draw, TexId, OUT_H, OUT_W};
+use slot_ui::{lang, opening, Draw, TexId, OUT_H, OUT_W};
 use tempfile::TempDir;
 
 /// How long a test waits on a real worker thread before deciding it never will answer.
@@ -104,7 +104,9 @@ fn the_link_row_is_absent_under_mgba_not_merely_refused() {
     let (mut app, _d) = playing_on(Core::Mgba);
     app.apply(Action::GameMenu);
     assert!(
-        !app.game_menu_rows().iter().any(|r| r.contains("联机")),
+        !app.game_menu_rows()
+            .iter()
+            .any(|r| r.contains(lang::LINK_ROW)),
         "an mGBA cart was shown a row whose fix is four steps away on the shelf"
     );
     // Link is the only row this menu has today, so under mGBA there is nothing to show and
@@ -117,7 +119,13 @@ fn the_link_row_is_absent_under_mgba_not_merely_refused() {
 fn the_link_row_is_present_under_gpsp() {
     let (mut app, _d) = playing_on(Core::Gpsp);
     app.apply(Action::GameMenu);
-    assert!(app.game_menu_rows().iter().any(|r| r.contains("Link")));
+    // Asked of the table rather than of the word: the row is `lang::LINK_ROW`, which is
+    // Chinese in the build that ships today. A literal here passes in one language and fails
+    // in the other, which is exactly how these two lines were found.
+    assert!(app
+        .game_menu_rows()
+        .iter()
+        .any(|r| r.contains(lang::LINK_ROW)));
 }
 
 /// The shelf's About sticker is a different screen on a different button, and this must not
@@ -131,7 +139,7 @@ fn the_game_menu_does_not_open_on_the_shelf() {
     assert!(matches!(app.phase(), Phase::Shelf));
     app.apply(Action::OpenAbout);
     assert!(
-        matches!(app.phase(), Phase::About),
+        matches!(app.phase(), Phase::About { .. }),
         "the shelf lost its About screen"
     );
 }
@@ -141,7 +149,7 @@ fn the_link_row_offers_host_and_join() {
     let (mut app, _d) = playing_on(Core::Gpsp);
     app.apply(Action::GameMenu);
     app.apply(Action::GbaDown(Btn::A));
-    assert_eq!(app.game_menu_rows(), vec!["主机", "加入"]);
+    assert_eq!(app.game_menu_rows(), vec![lang::LINK_HOST, lang::LINK_JOIN]);
 }
 
 /// B backs out one step at a time. The player one press into a two-press choice is not
@@ -153,7 +161,9 @@ fn b_backs_out_one_step_at_a_time_and_leaves_the_game_seated() {
     app.apply(Action::GbaDown(Btn::A));
     app.apply(Action::GbaDown(Btn::B));
     assert!(
-        app.game_menu_rows().iter().any(|r| r.contains("Link")),
+        app.game_menu_rows()
+            .iter()
+            .any(|r| r.contains(lang::LINK_ROW)),
         "B left the whole menu instead of the row it was in"
     );
     app.apply(Action::GbaDown(Btn::B));

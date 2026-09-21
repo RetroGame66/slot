@@ -1,7 +1,8 @@
 use slot_power::{Battery, Charge};
 use slot_store::Cart;
 use slot_ui::{
-    draw_footer, label_colour, Draw, Printed, Shelf, TexId, CART_W, CENTER_SCALE, OUT_W,
+    cluster_h, draw_status, label_colour, Draw, Printed, Shelf, TexId, CART_W, CENTER_SCALE,
+    HINT_H, OUT_W, TOP_BAND_H,
 };
 
 fn shelf_with(n: usize) -> Shelf {
@@ -230,22 +231,88 @@ fn the_other_direction_letting_go_does_not_stop_the_repeat() {
     assert_eq!(s.index, 2, "releasing left stopped a held right");
 }
 
-/// The gauge takes the shelf the wordmark had, at the same margin, so what is printed on the
-/// case still lines up with the row above it. Charging, with a bolt supplied: the bolt's own
-/// slot is reserved ahead of the capsule, so it is only while charging that anything actually
-/// reaches all the way to the margin — discharging leaves that slot empty and the capsule
-/// inset from it, which is the whole point of reserving it unconditionally.
+/// The gauge takes the right end of the band at the margin the row leaves beside its outer
+/// carts, so what is printed on the case lines up with what is above it. Charging, with a bolt
+/// supplied: the cluster is anchored by the tip of the nub, so its outermost point is the
+/// margin whatever is or is not drawn inside it.
 #[test]
-fn the_gauge_sits_where_the_wordmark_did() {
+fn the_gauge_takes_the_right_end_of_the_band() {
     let mut out = Vec::new();
-    draw_footer(
+    draw_status(
         Some(Battery {
             percent: 68,
             charge: Charge::Charging,
         }),
         Printed { face: None, w: 30 },
         Some(TexId::from_raw(1)),
+        Printed::default(),
+        None,
+        &mut out,
+    );
+    let rightmost = out
+        .iter()
+        .map(|d| match *d {
+            Draw::Rect { x, w, .. } | Draw::Tex { x, w, .. } => x + w,
+            _ => 0.0,
+        })
+        .fold(0.0, f32::max);
+    assert_eq!(
+        rightmost,
+        OUT_W as f32 - 24.0,
+        "the case margin is the case margin"
+    );
+}
+
+/// `draw_gauge`'s own suite proves the capsule holds still in isolation; the test above only
+/// ever calls the band while charging, so nothing here was exercising the discharging path
+/// through the call the app actually makes. This is that path, at both charge states, at the
+/// same percent: everything but the bolt itself has to come back identical.
+#[test]
+fn the_band_does_not_move_the_gauge_when_the_charge_state_changes() {
+    let mut idle = Vec::new();
+    draw_status(
+        Some(Battery {
+            percent: 68,
+            charge: Charge::Discharging,
+        }),
+        Printed { face: None, w: 30 },
+        None,
         Printed { face: None, w: 40 },
+        None,
+        &mut idle,
+    );
+    let mut charging = Vec::new();
+    draw_status(
+        Some(Battery {
+            percent: 68,
+            charge: Charge::Charging,
+        }),
+        Printed { face: None, w: 30 },
+        Some(TexId::from_raw(2)),
+        Printed { face: None, w: 40 },
+        None,
+        &mut charging,
+    );
+    for d in &idle {
+        assert!(
+            charging.contains(d),
+            "{d:?} moved or vanished when charging started"
+        );
+    }
+}
+
+/// The clock is the other half of the swap: it had the right-hand margin of the case and now
+/// holds the left one, at the same distance in, so the two readings still face each other
+/// across the band.
+#[test]
+fn the_clock_stays_at_the_left_margin() {
+    let mut out = Vec::new();
+    draw_status(
+        None,
+        Printed::default(),
+        None,
+        Printed { face: None, w: 40 },
+        None,
         &mut out,
     );
     let leftmost = out
@@ -258,15 +325,86 @@ fn the_gauge_sits_where_the_wordmark_did() {
     assert_eq!(leftmost, 24.0, "the case margin is the case margin");
 }
 
-/// `draw_gauge`'s own suite proves the capsule holds still in isolation; `the_gauge_sits_where_
-/// the_wordmark_did` above only ever calls `draw_footer` while charging, so nothing here was
-/// exercising the discharging path through the call the app actually makes. This is that path,
-/// at both charge states, at the same percent: everything but the bolt itself has to come back
-/// identical.
+/// A device with no gauge shows a band with a clock on it, not a band with a hole in it.
 #[test]
-fn the_footer_does_not_move_the_gauge_when_the_charge_state_changes() {
-    let mut idle = Vec::new();
-    draw_footer(
+fn a_band_with_no_gauge_still_draws_its_clock() {
+    let mut out = Vec::new();
+    draw_status(
+        None,
+        Printed::default(),
+        None,
+        Printed { face: None, w: 40 },
+        None,
+        &mut out,
+    );
+    assert_eq!(out.len(), 1);
+}
+
+/// The mode badge: what kind of a screen this is, printed beside what time it is.
+///
+/// Three things it has to do, and the first is the one that would be easy to lose. It goes
+/// *after* the clock and clear of it, because a clock that gains a digit must push the badge
+/// rather than be sat on by it. It waits for the clock rather than arriving first, so nothing on
+/// the band jumps when the time's face lands. And it stays well inside the middle of the screen:
+/// the letters are printed between the two ends, and a badge reaching the window would be
+/// competing with the one reading on this row that is actually being looked at.
+#[test]
+fn the_mode_badge_follows_the_clock_and_keeps_out_of_the_middle() {
+    let mut out = Vec::new();
+    let clock_w = 40;
+    draw_status(
+        None,
+        Printed::default(),
+        None,
+        Printed {
+            face: None,
+            w: clock_w,
+        },
+        Some(TexId::from_raw(7)),
+        &mut out,
+    );
+    let badge = out
+        .iter()
+        .find_map(|d| match *d {
+            Draw::Tex {
+                x, y, w, h, tex, ..
+            } if tex == TexId::from_raw(7) => Some((x, y, w, h)),
+            _ => None,
+        })
+        .expect("the badge was not drawn");
+    assert!(
+        badge.0 >= 24.0 + clock_w as f32,
+        "the badge overlaps the clock: {}",
+        badge.0
+    );
+    assert!(
+        badge.0 < 720.0 / 2.0 - badge.2,
+        "the badge reaches the middle of the screen: {}",
+        badge.0
+    );
+    // And it is on the band's line rather than floating above or below it: centred on the same
+    // 24px line the clock is set on. The gauge's cluster is not on that line any more — it has
+    // the number under it, so it is taller than a line and is centred on the band on its own —
+    // but the two ends still share their middle, which is what this holds for the badge's end.
+    assert!(
+        badge.1 > 0.0 && badge.1 + badge.3 < 58.0,
+        "the badge left the band: {}..{}",
+        badge.1,
+        badge.1 + badge.3
+    );
+}
+
+/// The two ends of the band are centred on the same line, which is the band's own middle.
+///
+/// Worth a test because the two are placed by different arithmetic and only one of them is a
+/// single row of type: the clock and the badge are `(TOP_BAND_H - HINT_H) / 2`, and the gauge is
+/// a capsule with a number under it, centred as a cluster. Nothing in either expression mentions
+/// the other, so the agreement is a coincidence of the numbers — and a coincidence that a change
+/// to one of the four constants would silently break, leaving one end of the band sitting high.
+#[test]
+fn both_ends_of_the_band_are_centred_on_the_same_line() {
+    let mut out = Vec::new();
+    draw_status(
         Some(Battery {
             percent: 68,
             charge: Charge::Discharging,
@@ -274,60 +412,65 @@ fn the_footer_does_not_move_the_gauge_when_the_charge_state_changes() {
         Printed { face: None, w: 30 },
         None,
         Printed { face: None, w: 40 },
-        &mut idle,
-    );
-    let mut charging = Vec::new();
-    draw_footer(
-        Some(Battery {
-            percent: 68,
-            charge: Charge::Charging,
-        }),
-        Printed { face: None, w: 30 },
-        Some(TexId::from_raw(2)),
-        Printed { face: None, w: 40 },
-        &mut charging,
-    );
-    for d in &idle {
-        assert!(
-            charging.contains(d),
-            "{d:?} moved or vanished when charging started"
-        );
-    }
-}
-
-/// The clock is the one thing on this band that did not change.
-#[test]
-fn the_clock_stays_at_the_right_margin() {
-    let mut out = Vec::new();
-    draw_footer(
         None,
-        Printed::default(),
-        None,
-        Printed { face: None, w: 40 },
         &mut out,
     );
-    let rightmost = out
+    // The clock's middle, from its own box.
+    let clock = out
         .iter()
-        .map(|d| match *d {
-            Draw::Rect { x, w, .. } | Draw::Tex { x, w, .. } => x + w,
-            _ => 0.0,
+        .find_map(|d| match *d {
+            Draw::Rect { x, y, w, .. } if (x - 24.0).abs() < 0.01 && w >= 40.0 => {
+                Some(y + HINT_H as f32 / 2.0)
+            }
+            Draw::Tex { x, y, w, .. } if (x - 24.0).abs() < 0.01 && w >= 40.0 => {
+                Some(y + HINT_H as f32 / 2.0)
+            }
+            _ => None,
         })
-        .fold(0.0, f32::max);
-    assert_eq!(rightmost, OUT_W as f32 - 24.0);
+        .expect("the clock was not drawn at the left margin");
+    // The gauge cluster's middle, from the capsule's own top edge — the highest quad at the
+    // right-hand end that is not the percent's, which is the one below it.
+    let capsule_top = out
+        .iter()
+        .filter_map(|d| match *d {
+            Draw::Rect { x, y, .. } | Draw::Tex { x, y, .. } if x > OUT_W as f32 / 2.0 => Some(y),
+            _ => None,
+        })
+        .fold(f32::MAX, f32::min);
+    let cluster_middle = capsule_top + cluster_h() / 2.0;
+    assert!(
+        (clock - cluster_middle).abs() < 0.01,
+        "the clock is at {clock} and the gauge at {cluster_middle}"
+    );
+    assert!(
+        (clock - TOP_BAND_H / 2.0).abs() < 0.01,
+        "the shared line is not the band's middle: {clock}"
+    );
 }
 
-/// A device with no gauge shows a band with a clock on it, not a band with a hole in it.
+/// Nothing to hang it off means nothing drawn: the badge is placed from the clock's width, so a
+/// frame that arrives before the time's face would put it at the margin and then move it.
 #[test]
-fn a_band_with_no_gauge_still_draws_its_clock() {
+fn the_mode_badge_waits_for_the_clock() {
     let mut out = Vec::new();
-    draw_footer(
+    draw_status(
         None,
         Printed::default(),
         None,
-        Printed { face: None, w: 40 },
+        Printed::default(),
+        Some(TexId::from_raw(7)),
         &mut out,
     );
-    assert_eq!(out.len(), 1);
+    assert!(
+        !out.iter().any(|d| matches!(
+            d,
+            Draw::Tex {
+                tex,
+                ..
+            } if *tex == TexId::from_raw(7)
+        )),
+        "the badge was drawn before the clock"
+    );
 }
 
 /// The carts are what was refused. Nothing else on the screen was: the slot is part of the

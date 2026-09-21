@@ -3,6 +3,7 @@ mod common;
 use common::{app_playing_in, app_playing_with, tmp_root_with_carts, CoreSnapshot};
 use slot_input::{Action, Btn};
 use slot_store::{Core, StateRing};
+use slot_ui::lang;
 
 #[test]
 fn undoing_a_save_removes_it_and_restores_the_evicted_entry() {
@@ -85,9 +86,9 @@ fn the_label_names_what_will_be_undone() {
     let d = tmp_root_with_carts(&["Emerald"]);
     let mut a = app_playing_in(d.path(), "Emerald");
     a.apply_at(Action::SaveState, 1_000);
-    assert_eq!(a.undo_label(), Some("撤销存档"));
+    assert_eq!(a.undo_label(), Some(lang::UNDO_SAVE));
     a.apply_at(Action::LoadState, 2_000);
-    assert_eq!(a.undo_label(), Some("撤销读取"));
+    assert_eq!(a.undo_label(), Some(lang::UNDO_LOAD));
 }
 
 /// The affordance is the switcher's and nowhere else's, so the button that works it is only

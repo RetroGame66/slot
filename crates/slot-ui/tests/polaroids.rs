@@ -122,10 +122,10 @@ fn the_index_clamps_at_both_ends() {
     );
 }
 
-/// The title is a fixed 360px texture centred at 180..540. The gauge now sits at the left
-/// margin, like the case band's, and may never reach into the title's own box.
+/// The title is a fixed 360px texture centred at 180..540. The gauge sits at the right margin,
+/// the corner the case band gives it, and may never reach into the title's own box.
 #[test]
-fn the_gauge_stays_clear_of_the_title_on_the_left() {
+fn the_gauge_stays_clear_of_the_title_on_the_right() {
     let p = switcher();
     let mut out = Vec::new();
     p.draw(
@@ -139,10 +139,10 @@ fn the_gauge_stays_clear_of_the_title_on_the_left() {
         &mut out,
     );
     // Excludes only the plate background: it is a `Rect` too, full width, and would otherwise
-    // pin `leftmost` to 0. Filtering by `x < 180.0` instead would silently drop a gauge that
-    // had grown wide enough to poke *past* the title's box back out the other side, which is
-    // exactly the failure this test exists to catch — so every non-background quad on the top
-    // plate counts, wherever it landed.
+    // pin `rightmost` to the panel's edge. Filtering by `x > 540.0` instead would silently drop
+    // a gauge that had grown wide enough to poke *into* the title's box, which is exactly the
+    // failure this test exists to catch — so every non-background quad on the top plate counts,
+    // wherever it landed.
     let gauge: Vec<_> = out
         .iter()
         .filter_map(|d| match *d {
@@ -154,20 +154,23 @@ fn the_gauge_stays_clear_of_the_title_on_the_left() {
             _ => None,
         })
         .collect();
-    assert!(!gauge.is_empty(), "no gauge drew at the left margin at all");
-    let leftmost = gauge.iter().map(|(x, _)| *x).fold(f32::MAX, f32::min);
-    assert_eq!(leftmost, 16.0, "the plate margin is 16");
-    let rightmost = gauge.iter().map(|(x, w)| x + w).fold(0.0, f32::max);
     assert!(
-        rightmost < 180.0,
+        !gauge.is_empty(),
+        "no gauge drew at the right margin at all"
+    );
+    let rightmost = gauge.iter().map(|(x, w)| x + w).fold(0.0, f32::max);
+    assert_eq!(rightmost, OUT_W as f32 - 16.0, "the plate margin is 16");
+    let leftmost = gauge.iter().map(|(x, _)| *x).fold(f32::MAX, f32::min);
+    assert!(
+        leftmost > 540.0,
         "the gauge reached into the title's texture"
     );
 }
 
-/// The clock stays where Task 6 originally put it — right-aligned at the margin, past the
-/// title's own box — even though the gauge has since moved to the other end.
+/// The clock holds the left margin, at the same distance in that the gauge is from the right:
+/// the two readings face each other across the plate, which is the pair the case band carries.
 #[test]
-fn the_clock_stays_clear_of_the_title_on_the_right() {
+fn the_clock_stays_clear_of_the_title_on_the_left() {
     let p = switcher();
     let mut out = Vec::new();
     p.draw(
@@ -177,23 +180,23 @@ fn the_clock_stays_clear_of_the_title_on_the_right() {
         Printed { face: None, w: 40 },
         &mut out,
     );
+    // Same exclusion the gauge side makes: the plate and the photo's backdrop are `Rect`s too
+    // and both span the screen, so counting them would only ever say `OUT_W`. What is left is
+    // the readings on the plate, wherever they landed.
     let clock: Vec<_> = out
         .iter()
         .filter_map(|d| match *d {
-            Draw::Rect { x, y, w, .. } | Draw::Tex { x, y, w, .. } if y < PLATE_H && x > 540.0 => {
+            Draw::Rect { x, y, w, .. } | Draw::Tex { x, y, w, .. }
+                if y < PLATE_H && w < OUT_W as f32 =>
+            {
                 Some((x, w))
             }
             _ => None,
         })
         .collect();
-    assert!(!clock.is_empty(), "no clock drew past the title at all");
-    let leftmost = clock.iter().map(|(x, _)| *x).fold(f32::MAX, f32::min);
-    assert!(
-        leftmost > 540.0,
-        "the clock reached into the title's texture"
-    );
-    let rightmost = clock.iter().map(|(x, w)| x + w).fold(0.0, f32::max);
-    assert_eq!(rightmost, OUT_W as f32 - 16.0, "the plate margin is 16");
+    assert_eq!(clock, vec![(16.0, 40.0)], "the clock is not at the margin");
+    let (x, w) = clock[0];
+    assert!(x + w < 180.0, "the clock reached into the title's texture");
 }
 
 /// The same degradation as the case band: no gauge, no capsule, and the clock still lands.

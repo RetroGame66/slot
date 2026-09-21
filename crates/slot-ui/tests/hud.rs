@@ -1,4 +1,14 @@
-use slot_ui::{ff_badge, icon_face, Draw, FfState, Hud, HudKind, Icon, OUT_H, OUT_W};
+use slot_ui::{
+    ff_badge, icon_face, Draw, FfState, Hud, HudKind, Icon, Toast, OUT_H, OUT_W, PLATE_H, PLATE_Y,
+    TOP_BAND_H,
+};
+
+fn top_edge(d: &Draw) -> Option<f32> {
+    match *d {
+        Draw::Rect { y, .. } | Draw::Tex { y, .. } | Draw::Turned { y, .. } => Some(y),
+        Draw::Game | Draw::Shot { .. } => None,
+    }
+}
 
 fn bottom_edge(d: &Draw) -> Option<f32> {
     match *d {
@@ -12,7 +22,7 @@ fn fill(kind: HudKind, value: u8) -> f32 {
     let mut h = Hud::new();
     h.show(kind, value, false, 0);
     let mut out = Vec::new();
-    h.draw(0, &mut out);
+    h.draw(0, 0.0, &mut out);
     match out.last().expect("no bar in the list") {
         Draw::Rect { w, .. } => *w,
         _ => panic!("the bar must be a rect"),
@@ -43,16 +53,71 @@ fn volume_reads_against_100_not_the_brightness_scale() {
     assert_eq!(fill(HudKind::Volume, 100), full);
 }
 
+/// On a screen with nothing at the top of it the plate takes the top edge; on the shelf it
+/// hangs off the letter band instead, and the whole readout goes with it.
 #[test]
 fn the_hud_sits_at_the_top_of_the_screen() {
     let mut h = Hud::new();
     h.show(HudKind::Volume, 50, false, 0);
     let mut out = Vec::new();
-    h.draw(0, &mut out);
+    h.draw(0, 0.0, &mut out);
     let lowest = out.iter().filter_map(bottom_edge).fold(0.0f32, f32::max);
     assert!(
         lowest < OUT_H as f32 / 2.0,
         "hud reaches {lowest}, expected the top half"
+    );
+    let top = out.iter().filter_map(top_edge).fold(f32::MAX, f32::min);
+    assert!(
+        top.abs() < 0.01,
+        "the plate does not start at the top: {top}"
+    );
+}
+
+/// The shelf's band is at the top of the screen, and a plate over it would hide the index and
+/// the clock for the second and a half a level is up. So the plate starts where the band ends,
+/// and nothing it draws reaches back up into the band.
+#[test]
+fn the_plate_hangs_under_the_letter_band() {
+    let mut h = Hud::new();
+    h.show(HudKind::Volume, 50, false, 0);
+    let mut out = Vec::new();
+    h.draw(0, PLATE_Y, &mut out);
+
+    let top = out.iter().filter_map(top_edge).fold(f32::MAX, f32::min);
+    assert!(
+        (top - PLATE_Y).abs() < 0.01,
+        "the plate does not start at the band's lower edge: {top}"
+    );
+    assert!(
+        (PLATE_Y - TOP_BAND_H).abs() < 0.01,
+        "the plate is not hung off the band's own height"
+    );
+    // Nothing crosses back into the band, which would be the defect in a different shape.
+    for d in &out {
+        let t = top_edge(d).expect("everything the hud draws is a quad");
+        assert!(
+            t >= PLATE_Y - 0.01,
+            "something the hud drew reaches into the band: {t}"
+        );
+    }
+    // And the readout still fits inside the plate it is read against.
+    let bottom = out.iter().filter_map(bottom_edge).fold(0.0f32, f32::max);
+    assert!(
+        bottom <= PLATE_Y + PLATE_H + 0.01,
+        "the readout overflows its own plate: {bottom}"
+    );
+    // A toast is the other thing read against the plate, and `toast_rect` places it inside a
+    // plate standing at zero. It has to travel with the plate all the same, so the offset is
+    // applied where the plate's own top is known. Checked here without a face, which is the
+    // part of it that is arithmetic.
+    let mut toast = Vec::new();
+    let mut h = Hud::new();
+    h.toast(Toast::StateSaved, 0);
+    h.draw(0, PLATE_Y, &mut toast);
+    let t = toast.iter().filter_map(top_edge).fold(f32::MAX, f32::min);
+    assert!(
+        (t - PLATE_Y).abs() < 0.01,
+        "the plate did not travel with the toast: {t}"
     );
 }
 
@@ -62,7 +127,7 @@ fn the_hud_draws_a_dark_plate_behind_itself() {
     let mut h = Hud::new();
     h.show(HudKind::Brightness, 5, false, 0);
     let mut out = Vec::new();
-    h.draw(0, &mut out);
+    h.draw(0, 0.0, &mut out);
     let plate = out.first().expect("nothing drawn");
     let Draw::Rect { w, colour, .. } = plate else {
         panic!("first draw is not the plate")
@@ -105,7 +170,7 @@ fn an_empty_rewind_buffer_still_draws_an_empty_bar() {
     let mut h = Hud::new();
     h.show(HudKind::Rewind, 0, false, 0);
     let mut out = Vec::new();
-    h.draw(0, &mut out);
+    h.draw(0, 0.0, &mut out);
     assert!(
         out.len() >= 2,
         "the track disappeared when the buffer emptied"
@@ -154,7 +219,7 @@ fn the_badge_outlives_the_bar_timer_without_a_plate() {
     let mut h = Hud::new();
     h.set_ff(FfState::Latched);
     let mut out = Vec::new();
-    h.draw(60_000, &mut out);
+    h.draw(60_000, 0.0, &mut out);
     assert!(
         !out.iter()
             .any(|d| matches!(d, Draw::Rect { w, .. } if *w == OUT_W as f32)),
@@ -172,7 +237,7 @@ fn the_badge_leaves_when_fast_forward_stops() {
     h.set_ff(FfState::Held);
     h.set_ff(FfState::Off);
     let mut out = Vec::new();
-    h.draw(0, &mut out);
+    h.draw(0, 0.0, &mut out);
     assert!(out.is_empty(), "the plate outlived the fast forward");
 }
 
@@ -190,7 +255,7 @@ fn the_ff_badge_draws_no_plate_but_the_bar_still_does() {
     let mut badge_only = Hud::new();
     badge_only.set_ff(FfState::Held);
     let mut out = Vec::new();
-    badge_only.draw(60_000, &mut out);
+    badge_only.draw(60_000, 0.0, &mut out);
     assert_eq!(
         full(&out),
         0,
@@ -200,6 +265,6 @@ fn the_ff_badge_draws_no_plate_but_the_bar_still_does() {
     let mut with_bar = Hud::new();
     with_bar.show(HudKind::Volume, 50, false, 0);
     let mut out = Vec::new();
-    with_bar.draw(0, &mut out);
+    with_bar.draw(0, 0.0, &mut out);
     assert_eq!(full(&out), 1, "the bar lost the plate it is read against");
 }

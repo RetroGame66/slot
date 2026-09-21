@@ -1,4 +1,6 @@
-use slot::audio::{ring_capacity, AudioSink, Ring, StubSink};
+// `Profile` is the latency profile the app chooses at boot. A test wants the default one, and
+// says so rather than leaving the argument implied.
+use slot::audio::{ring_capacity, AudioSink, Profile, Ring, StubSink};
 
 fn ramp(frames: usize, from: i16) -> Vec<i16> {
     (0..frames * 2)
@@ -9,7 +11,7 @@ fn ramp(frames: usize, from: i16) -> Vec<i16> {
 #[test]
 fn queued_frames_tracks_the_device_backlog() {
     let mut s = StubSink::new();
-    s.open(32768).unwrap();
+    s.open(32768, Profile::default()).unwrap();
     let r = s.ring();
     let primed = r.queued_frames();
     r.push_blocking(&ramp(1000, 0));
@@ -23,7 +25,7 @@ fn queued_frames_tracks_the_device_backlog() {
 #[test]
 fn opening_primes_the_ring_to_the_drc_target() {
     let mut s = StubSink::new();
-    s.open(48_000).unwrap();
+    s.open(48_000, Profile::default()).unwrap();
     let r = s.ring();
     assert_eq!(r.queued_frames(), r.capacity_frames() / 2);
     s.device_read(64);

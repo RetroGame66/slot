@@ -39,6 +39,31 @@ const REPEAT_DELAY_MS: Millis = 400;
 /// stop on one.
 const REPEAT_MS: Millis = 110;
 
+/// A letter jump's own travel, played by hand rather than by the spring.
+///
+/// The spring's own travel is what a single cart step wants, but a letter jump can cross
+/// hundreds of carts and the spring's pace does not scale with distance — it settles in the
+/// same few hundred milliseconds whatever it is asked to cover, which at range is a blur the
+/// eye cannot read and at one cart is exactly right. So a jump glides instead: `scroll` is
+/// swept from where the row stands to the cart the dial chose, over a duration that grows a
+/// little with the distance and then stops growing. The sweep is a smoothstep, so it eases in
+/// and out — the row *accelerates* away from the letter it is leaving and settles onto the
+/// one it is arriving at, and every cart it skips passes through the middle on the way.
+#[derive(Copy, Clone)]
+struct Glide {
+    from: f32,
+    to: f32,
+    t: f32,
+    dur: f32,
+}
+
+/// The glide's length in seconds, as a function of the carts it has to cross. Short jumps are
+/// near a spring's own settle so a single-letter step does not feel slower than an arrow; the
+/// cap keeps a four-hundred cart jump from becoming a slideshow.
+fn glide_seconds(distance: f32) -> f32 {
+    (0.22 + distance * 0.004).clamp(0.22, 0.85)
+}
+
 pub struct Shelf {
     pub carts: Vec<Cart>,
     pub index: usize,
@@ -51,10 +76,17 @@ pub struct Shelf {
     /// The cart silhouette in black, drawn under a dimmed cart. One texture for the whole
     /// row: every cart is the same shape.
     shadow: Option<TexId>,
+    /// A cart with a blank label, drawn for a cart whose own face is not built yet. One texture
+    /// for the whole row for the same reason `shadow` is one — until the label goes on they are
+    /// all the same cart — and it is what a jump across the alphabet shows sliding past.
+    placeholder: Option<TexId>,
     vel: f32,
     /// The direction being held and when it next repeats. Repeat lives here rather than in
     /// the gesture layer so nothing in game starts auto firing.
     held: Option<(i32, Millis)>,
+    /// A letter jump in flight. While one is running it owns `scroll` and the spring stands
+    /// down; a cart step drops it so the arrows always answer immediately.
+    glide: Option<Glide>,
 }
 
 impl Shelf {
@@ -65,8 +97,10 @@ impl Shelf {
             scroll: 0.0,
             faces: Vec::new(),
             shadow: None,
+            placeholder: None,
             vel: 0.0,
             held: None,
+            glide: None,
         }
     }
 
@@ -74,6 +108,11 @@ impl Shelf {
     /// can mint a `TexId`.
     pub fn set_shadow(&mut self, face: TexId) {
         self.shadow = Some(face);
+    }
+
+    /// The blank cart a not-yet-built face stands in as. Set once at boot, with the shadow.
+    pub fn set_placeholder(&mut self, face: TexId) {
+        self.placeholder = Some(face);
     }
 
     pub fn set_faces(&mut self, faces: Vec<Option<TexId>>) {
@@ -110,28 +149,34 @@ impl Shelf {
         Some((&self.carts[i], self.faces.get(i).copied().flatten()))
     }
 
-    /// Where the row is, in the continuous coordinate the spring lives in. The arrow keys are
-    /// the only thing that moves the selection one cart at a time; when something else moves
-    /// it — the letter ring, which can cross four hundred carts at once — the row is placed a
-    /// short way *short* of where it is going, so the spring's travel is the movement. That
-    /// lands a long jump as a flick through the last cart rather than as a blur through all of
-    /// them, which is many seconds of unwatchable row.
+    /// Send the row to the cart the letter dial has just chosen, sweeping it across everything
+    /// in between rather than flicking through only the last cart. Called after `index` has
+    /// been set, since that is what the row is measured towards.
     ///
-    /// Called after `index` has been set, since it is `index` it is measured back from.
+    /// The direction is not chosen here. The row is a ring, so the cart the dial arrived at has
+    /// an image on either side, and the sweep takes the one nearest where the row already
+    /// stands: stepping the dial backward runs the row backward. That is the whole of what
+    /// keeps the dial and the row agreeing about which way is "down" — a seat that always
+    /// played forward would have the two controls contradict each other on every backward step.
     ///
-    /// A card with no more carts than the row has slots gets no setback at all, however small:
-    /// the row draws each of its carts once, so on those cards shifting them by even one place
-    /// moves the cart that covers the left edge out of the range the row draws, and a strip of
-    /// bare backdrop shows down the side for the length of the slide. Those cards simply appear
-    /// on the new cart, which costs them nothing: nobody needs a dial to find a game in six.
-    pub fn seat_short_of(&mut self, short: f32) {
+    /// A card with no more carts than the row has slots is left to the spring: there is nothing
+    /// to glide across, and a sweep one cart wide would only be a slower version of the single
+    /// step the row already draws cleanly.
+    pub fn glide_to_target(&mut self) {
         let rows = SLOTS * 2 + 1;
-        let short = if self.carts.len() as i32 >= rows {
-            short
-        } else {
-            0.0
-        };
-        self.scroll = self.index as f32 - short;
+        if (self.carts.len() as i32) < rows {
+            self.glide = None;
+            self.vel = 0.0;
+            return;
+        }
+        let from = self.scroll;
+        let to = self.scroll_target();
+        self.glide = Some(Glide {
+            from,
+            to,
+            t: 0.0,
+            dur: glide_seconds((to - from).abs()),
+        });
         self.vel = 0.0;
     }
 
@@ -197,6 +242,9 @@ impl Shelf {
         if n == 0 {
             return;
         }
+        // An arrow is a direction of its own, and it has to answer on the press: a jump still
+        // gliding is dropped so the spring takes the row from wherever the glide left it.
+        self.glide = None;
         self.index = (self.index as i32 + by).rem_euclid(n as i32) as usize;
     }
 
@@ -227,6 +275,23 @@ impl Shelf {
     }
 
     pub fn update(&mut self, dt: f32) {
+        // A letter jump owns the row while it runs. Its sweep is the movement, so the spring
+        // must not also be pulling at `scroll`, or the two would argue over the same cart.
+        if let Some(mut g) = self.glide {
+            g.t += dt;
+            let p = (g.t / g.dur).clamp(0.0, 1.0);
+            // Smoothstep: ease in, ease out, so the row accelerates away and settles in.
+            let e = p * p * (3.0 - 2.0 * p);
+            self.scroll = g.from + (g.to - g.from) * e;
+            self.vel = 0.0;
+            self.glide = if p >= 1.0 {
+                self.scroll = g.to;
+                None
+            } else {
+                Some(g)
+            };
+            return;
+        }
         let accel = -2.0 * OMEGA * self.vel - OMEGA * OMEGA * (self.scroll - self.scroll_target());
         self.vel += accel * dt;
         self.scroll += self.vel * dt;
@@ -264,16 +329,32 @@ impl Shelf {
     ) {
         let recede = recede.clamp(0.0, 1.0);
         let dim = dim.clamp(0.0, 1.0);
-        let target = self.scroll_target();
+        let n = self.carts.len() as i64;
+        if n == 0 {
+            return;
+        }
+        // The row is laid out around where it *is*, not around the cart it is heading for.
+        // While a letter jump glides, `scroll` sweeps across everything between two letters
+        // and each of those carts has to be drawn where `scroll` puts it this frame; anchoring
+        // on the destination would leave the row blank for the length of the sweep. At rest
+        // the two are the same place, so a still row is drawn exactly as it always was.
+        let base = self.scroll.round() as i64;
         for slot in -SLOTS..=SLOTS {
-            let Some(i) = self.cart_at_offset(slot) else {
+            let off = slot as i64;
+            let r = off.rem_euclid(n);
+            // Only a cart's representative nearest the middle is drawn, so a row too short to
+            // fill its slots does not show the same cart on both sides of the selection.
+            let nearest = if r * 2 > n { r - n } else { r };
+            if nearest != off {
                 continue;
-            };
+            }
+            let coord = base + off;
+            let i = coord.rem_euclid(n) as usize;
             let cart = &self.carts[i];
             if hidden == Some(cart.stem.as_str()) {
                 continue;
             }
-            let offset = target + slot as f32 - self.scroll;
+            let offset = coord as f32 - self.scroll;
             let t = offset.abs().min(1.0);
             let scale = CENTER_SCALE + (SIDE_SCALE - CENTER_SCALE) * t;
             let alpha = (1.0 + (SIDE_ALPHA - 1.0) * t) * (1.0 - recede);
@@ -310,23 +391,35 @@ impl Shelf {
                     tex,
                     alpha: alpha * dim,
                 },
-                // A cart whose face has not been uploaded still holds its place. A gap in
-                // the row would read as a missing game.
-                None => {
-                    let c = label_colour(&label_text(cart));
-                    Draw::Rect {
+                // A cart whose face has not been uploaded still holds its place, and as a cart:
+                // the blank body rather than a gap, or the label's colour, in its place. A gap
+                // would read as a missing game; a colour block reads as paint sliding past when
+                // a jump crosses a hundred carts that never got built.
+                None => match self.placeholder {
+                    Some(tex) => Draw::Tex {
                         x,
                         y,
                         w,
                         h,
-                        colour: [
-                            c[0] as f32 / 255.0,
-                            c[1] as f32 / 255.0,
-                            c[2] as f32 / 255.0,
-                            alpha * dim,
-                        ],
+                        tex,
+                        alpha: alpha * dim,
+                    },
+                    None => {
+                        let c = label_colour(&label_text(cart));
+                        Draw::Rect {
+                            x,
+                            y,
+                            w,
+                            h,
+                            colour: [
+                                c[0] as f32 / 255.0,
+                                c[1] as f32 / 255.0,
+                                c[2] as f32 / 255.0,
+                                alpha * dim,
+                            ],
+                        }
                     }
-                }
+                },
             });
         }
     }

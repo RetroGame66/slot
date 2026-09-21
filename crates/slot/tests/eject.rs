@@ -8,7 +8,7 @@ use slot::app::Phase;
 use slot::emu::Speed;
 use slot::persist::eject;
 use slot_input::Action;
-use slot_store::{read_slot_state, write_slot_state, Core, SlotState, StateRing};
+use slot_store::{read_slot_state, write_slot_state, Core, Mode, SlotState, StateRing};
 use slot_ui::{Draw, CART_W, OUT_H, OUT_W};
 
 fn seated(cart: &str) -> SlotState {
@@ -192,6 +192,10 @@ fn eject_preserves_the_levels() {
             muted: true,
             clock_set: true,
             utc_offset_min: 0,
+            // Written down rather than defaulted: these two are the literals that spell the
+            // whole state out, so a field added without them is a build error — which is how
+            // this one was found.
+            mode: Mode::Dark,
         },
     )
     .unwrap();

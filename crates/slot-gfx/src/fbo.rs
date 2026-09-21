@@ -105,8 +105,7 @@ impl Compositor {
         self.applied_cc = Some(*m);
     }
 
-    /// The gamma the colour correction runs in, pushed alongside the matrix every frame. 1.0
-    /// multiplies in the encoded space; 2.2 does the correction in linear.
+    /// 色彩校正的 gamma，随矩阵一起每帧推。1.0 = 编码空间直乘；2.2 = 线性空间做校正。
     pub fn set_cc_gamma(&mut self, g: f32) {
         if self.applied_cc_gamma == Some(g) {
             return;

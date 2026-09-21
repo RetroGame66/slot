@@ -4,6 +4,14 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
+[features]
+# The language this build speaks. Chinese is the default, so the build that ships today is the
+# build that shipped yesterday; `--features lang-en` is the pure English one, which carries no
+# Chinese at all — see `src/lang.rs`. A feature rather than a card setting because it is a build,
+# not a preference: the English release and the Chinese one are two artefacts, and the English
+# one must not contain the other language anywhere.
+lang-en = []
+
 [dependencies]
 fontdue = { workspace = true }
 png = { workspace = true }

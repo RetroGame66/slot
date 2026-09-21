@@ -8,6 +8,8 @@ rust-version.workspace = true
 default = ["host"]
 host = ["dep:winit", "dep:cpal", "dep:gilrs", "slot-gfx/host"]
 device = ["slot-gfx/device"]
+# Forwarded so one flag switches the whole program: see slot-ui's `lang-en`.
+lang-en = ["slot-ui/lang-en"]
 
 [dependencies]
 # default-features = false or `host` unifies on for every build: the feature comes in through

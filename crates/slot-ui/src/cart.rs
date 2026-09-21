@@ -111,6 +111,22 @@ pub fn cart_shadow() -> CartFace {
     }
 }
 
+/// A cart with nothing on it: the default shell, its moulding, and the empty recess the label
+/// would sit in — no label.
+///
+/// The stand-in for a cart whose own face has not been built yet. A jump across the alphabet
+/// crosses hundreds of carts and they cannot all be rasterised, but they can all be *a cart*:
+/// this one. Drawn where that cart is, it slides past as a cartridge rather than as the label's
+/// colour alone, which read as a bar of paint going by.
+pub fn cart_placeholder() -> CartFace {
+    let shell = shell_for("");
+    let mut face = shell_face(&shell);
+    mould_detail(&mut face, &shell);
+    recess_label(&mut face, &shell);
+    clip_to_silhouette(&mut face);
+    face
+}
+
 pub fn cart_face(cart: &Cart) -> CartFace {
     let t = std::time::Instant::now();
     let shell = shell_for(&cart.code);

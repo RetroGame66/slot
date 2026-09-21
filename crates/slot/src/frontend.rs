@@ -7,12 +7,13 @@ use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
 use slot_input::{InputSource, Millis};
 use slot_power::{Platform, Power};
 use slot_store::format_stamp;
+use slot_ui::lang;
 use slot_ui::{
-    arrows_hint_face, cart_face, cart_shadow, cheat_row_face, chip_face, chip_shadow_face,
-    clean_label, hhmm, hint_face, icon_face, letters, menu_face, photo_face, set_clock_hint_face,
-    shelf_title_face, shortcut_hint_face, shortcut_row_face, socket_face, sticker_face, title_face,
-    toast_face, wallpaper_face, word_face, Icon, PowerChoice, StickerFields, Toast, ALERT_PX,
-    BOLT_PX, HUD_ICON_PX, HUD_INK, LEGEND, SHORTCUT_ROWS,
+    arrows_hint_face, cart_face, cart_placeholder, cart_shadow, cheat_row_face, chip_face,
+    chip_shadow_face, clean_label, clock_face, hhmm, hint_face, icon_face, letters, menu_face,
+    photo_face, set_clock_hint_face, shelf_title_face, shortcut_hint_face, shortcut_row_face,
+    socket_face, sticker_face, title_face, toast_face, wallpaper_face, word_face, Icon,
+    PowerChoice, StickerFields, Toast, ALERT_PX, BOLT_PX, HUD_ICON_PX, LEGEND, SHORTCUT_ROWS,
 };
 
 use crate::app::{App, GameRow, LinkRow, Phase};
@@ -220,10 +221,45 @@ impl Frontend {
         self.shelf_missing = (0..self.session.app().carts().len())
             .filter(|i| !window.contains(i))
             .collect();
+        // The furniture, and the one group that has to be built again when the mode moves:
+        // see `upload_fixed`.
+        self.upload_fixed(compositor);
+        // Everything above is one texture per fixed string or glyph: none of it scales with
+        // the card, all of it has to be rasterised before the first frame, and it is the last
+        // large block left in the boot once the font and the cart faces are accounted for.
+        self.session.boot_note(&format!(
+            "fixed faces {} ms",
+            fixed_at.elapsed().as_millis()
+        ));
+        let wall_at = Instant::now();
+        self.upload_wallpaper(compositor);
+        // The card's wallpaper, decoded and scaled. A card whose wallpaper is a photograph
+        // pays for it here, once, in the same way a label used to.
+        self.session
+            .boot_note(&format!("wallpaper {} ms", wall_at.elapsed().as_millis()));
+        self.upload_faces_note(faces_at);
+    }
+
+    /// Every face on the device that is not a cart's and not the wallpaper: one texture per
+    /// fixed string or glyph, all of it ink burned in.
+    ///
+    /// Split out of `upload_faces` so a mode change can run it alone. The font is read once off
+    /// the card and the cart faces scale with the card; neither of those has a palette in it —
+    /// a label is a picture — so neither belongs on the path that follows the mode, and asking
+    /// them to run again would spend a second and a half of boot budget re-deriving nine hundred
+    /// labels in colours they never had.
+    ///
+    /// Everything here *can* change, but only when the mode does, which is a press the user made
+    /// and knows about. That is the whole trade: the type is a texture, so the ink cannot move
+    /// under it, so the texture has to be rebuilt. The old textures are leaked rather than freed
+    /// — the compositor has no `destroy_texture` — which is a few hundred kilobytes a switch on
+    /// a device with sixteen megabytes of heap. Worth saying out loud rather than leaving for
+    /// someone to find in a memory graph.
+    fn upload_fixed(&mut self, compositor: &mut Compositor) {
         let icons = Icon::ALL
             .iter()
             .map(|i| {
-                let f = icon_face(*i, HUD_ICON_PX, HUD_INK);
+                let f = icon_face(*i, HUD_ICON_PX, slot_ui::palette::ink());
                 compositor.create_texture(f.w, f.h, &f.rgba)
             })
             .collect();
@@ -241,8 +277,8 @@ impl Frontend {
             .iter()
             .map(|c| {
                 let f = menu_face(match c {
-                    PowerChoice::Restart => "正在重启",
-                    PowerChoice::PowerOff => "正在关机",
+                    PowerChoice::Restart => lang::SHUTDOWN_RESTART,
+                    PowerChoice::PowerOff => lang::SHUTDOWN_POWER_OFF,
                 });
                 (compositor.create_texture(f.w, f.h, &f.rgba), f.w, f.h)
             })
@@ -283,9 +319,9 @@ impl Frontend {
         // Every action the picker takes, the way out first and the choice last, as the
         // switcher's legend is ordered.
         let legend = [
-            hint_face("B", "取消"),
-            arrows_hint_face("切换"),
-            hint_face("A", "选择"),
+            hint_face("B", lang::CORE_CANCEL),
+            arrows_hint_face(lang::CORE_SWAP),
+            hint_face("A", lang::CORE_CHOOSE),
         ]
         .into_iter()
         .map(|f| (compositor.create_texture(f.w, f.h, &f.rgba), f.w))
@@ -326,17 +362,26 @@ impl Frontend {
         let shadow = cart_shadow();
         let id = compositor.create_texture(shadow.w, shadow.h, &shadow.rgba);
         self.session.app_mut().set_cart_shadow(id);
+        // The blank cart every not-yet-built face is drawn as. A jump across the alphabet
+        // crosses carts no filler will ever reach in time, and this is what slides past in
+        // their place — a cartridge, rather than the label's colour as a bar of paint.
+        let blank = cart_placeholder();
+        let blank = compositor.create_texture(blank.w, blank.h, &blank.rgba);
+        self.session.app_mut().set_cart_placeholder(blank);
         // `draw_gauge` now draws the bolt beside the capsule, on the housing, in its own
         // reserved slot rather than over the fill. The housing tint was only ever needed to
         // hide the bolt inside the fill it sat on; out here it sits where every other HUD
         // glyph does, so it takes the same ink they do.
-        let bolt = icon_face(Icon::Charging, BOLT_PX, HUD_INK);
+        let bolt = icon_face(Icon::Charging, BOLT_PX, slot_ui::palette::ink());
         let bolt_id = compositor.create_texture(bolt.w, bolt.h, &bolt.rgba);
         self.session.app_mut().set_bolt_face(bolt_id);
-        // The letter drum: one face per slot of a fixed alphabet, the housing it shows through,
-        // and the ridge that joins two of its facets — twenty-nine small textures against the
-        // cart faces' one apiece. None of them can ever change, so they are built here with the
+        // The letter strip: one face per slot of a fixed alphabet — twenty-seven small
+        // textures against the cart faces' one apiece — and the one piece of metal the strip
+        // repeats between them. None of them can ever change, so they are built here with the
         // rest of the fixed furniture rather than lazily the way a cart's is.
+        //
+        // The ridge is the only *texture* the strip carries: the band the letters stand in is
+        // the machine's own, drawn from the cart bay's numbers every frame by `slot_chrome`.
         let letter_faces = letters::SLOTS
             .iter()
             .map(|ch| {
@@ -345,18 +390,16 @@ impl Frontend {
             })
             .collect();
         self.session.app_mut().set_letter_faces(letter_faces);
-        let (w, h) = letters::capsule_size();
-        let capsule = letters::capsule_face(w, h);
-        let capsule_id = compositor.create_texture(capsule.w, capsule.h, &capsule.rgba);
-        self.session
-            .app_mut()
-            .set_letter_capsule_face(capsule_id, capsule.w, capsule.h);
         let ridge = letters::ridge_face();
-        let ridge_id = compositor.create_texture(ridge.w, ridge.h, &ridge.rgba);
-        self.session.app_mut().set_letter_ridge_face(ridge_id);
-        // The shortcut card, in the same breath as the drum: twenty-odd rows of fixed string,
-        // none of which can ever change, and opening a help screen is the worst moment to be
-        // asking a font for them.
+        let ridge = (
+            compositor.create_texture(ridge.w, ridge.h, &ridge.rgba),
+            ridge.w,
+            ridge.h,
+        );
+        self.session.app_mut().set_letter_ridge_face(ridge);
+        // The shortcut card, in the same breath as the letters: twenty-odd rows of fixed
+        // string, none of which can ever change, and opening a help screen is the worst moment
+        // to be asking a font for them.
         let rows = SHORTCUT_ROWS
             .iter()
             .map(|r| {
@@ -371,20 +414,35 @@ impl Frontend {
             hint.h,
         );
         self.session.app_mut().set_shortcut_faces(rows, Some(hint));
-        // Everything above is one texture per fixed string or glyph: none of it scales with
-        // the card, all of it has to be rasterised before the first frame, and it is the last
-        // large block left in the boot once the font and the cart faces are accounted for.
+    }
+
+    /// The mode moved: re-rasterise everything whose ink is burned in, and drop the caches of
+    /// everything that will be rasterised again on demand.
+    ///
+    /// Two halves, and both are needed. `upload_fixed` covers the faces that only exist once —
+    /// the glyphs, the menus, the letters, the shortcut card. The caches below cover the faces
+    /// that are built lazily as the screens need them: the shelf's title, the clock and the
+    /// charge on the band, the about card, the switcher's caption. Clearing them is what makes
+    /// the *next* frame rebuild them rather than the last one; the four defaults are the value
+    /// each compares against to decide it has nothing worth keeping.
+    ///
+    /// The cart faces are deliberately not in either half. A label is a picture and a shell is a
+    /// colour off the game's code: nothing about a cartridge is printed in the palette, which is
+    /// the same reason `upload_faces` can put nine hundred of them outside the boot's critical
+    /// path.
+    fn rebake(&mut self, compositor: &mut Compositor) {
+        let at = Instant::now();
+        self.upload_fixed(compositor);
+        self.title_tex = None;
+        self.shelf_title_tex = None;
+        self.shelf_titled = None;
+        self.switcher = Switcher::default();
+        self.clocks = Clocks::default();
+        self.about = AboutFace::default();
         self.session.boot_note(&format!(
-            "fixed faces {} ms",
-            fixed_at.elapsed().as_millis()
+            "reprinted for the mode in {} ms",
+            at.elapsed().as_millis()
         ));
-        let wall_at = Instant::now();
-        self.upload_wallpaper(compositor);
-        // The card's wallpaper, decoded and scaled. A card whose wallpaper is a photograph
-        // pays for it here, once, in the same way a label used to.
-        self.session
-            .boot_note(&format!("wallpaper {} ms", wall_at.elapsed().as_millis()));
-        self.upload_faces_note(faces_at);
     }
 
     /// The third boot line: how long the card's faces took, which is the only part of the boot
@@ -525,6 +583,13 @@ impl Frontend {
                 "first frame at {} s of uptime  (base VERSION_ID={})",
                 uptime, base
             ));
+        }
+        // The mode, before the frame is built: it is the one thing the app can change that the
+        // textures cannot follow on their own, so the app raises a flag and this is what takes
+        // it. Done here rather than in `advance` because this is the only place with a
+        // compositor, and a texture cannot be minted without one.
+        if self.session.app_mut().take_mode_dirty() {
+            self.rebake(compositor);
         }
         // First, so a face that finished since the last frame is on screen this frame.
         self.pump_shelf_faces(compositor);
@@ -705,7 +770,9 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
     }
     let shown = hhmm(app.wall_secs());
     if shown != clocks.shown {
-        let face = word_face(&shown);
+        // The clock's own size, not the label size the percent under the gauge is set in: the two
+        // are the two readings on the band and the time is the one that was asked to grow.
+        let face = clock_face(&shown);
         clocks.shown = shown;
         let w = face.w;
         let id = upload(compositor, &mut clocks.shelf, face);

@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """Verify the freshly built device binary: aarch64 ELF + Chinese UI strings + glibc ceiling."""
-import os, struct, sys
+import struct, sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-P = os.path.join(HERE, "target-device", "aarch64-unknown-linux-gnu", "release", "slot")
+P = r"F:/WorkBuddyWorkSpace/2026-09-11-08-38-21/slot-main/target-device/aarch64-unknown-linux-gnu/release/slot"
 data = open(P, "rb").read()
 print("file size :", len(data), "bytes")
 

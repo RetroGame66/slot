@@ -1,7 +1,7 @@
 use slot_store::Cart;
 use slot_ui::{
-    draw_empty_slot, edge, housing, icon_box, label_panel, opening, recess, Draw, Shelf,
-    SlotChrome, ALERT_PX, CART_H, CART_W, CENTER_SCALE, MOUTH_H, OUT_H, OUT_W,
+    draw_edge_glow, draw_empty_slot, edge, housing, icon_box, label_panel, opening, recess, Draw,
+    Shelf, SlotChrome, ALERT_PX, CART_H, CART_W, CENTER_SCALE, MOUTH_H, OUT_H, OUT_W, TOP_BAND_H,
 };
 
 fn cart() -> Cart {
@@ -675,5 +675,72 @@ fn the_cart_catches_on_the_top_edge_of_the_slot() {
     assert!(
         (at - lip).abs() < CART_H as f32 * 0.25,
         "it hesitates at {at} but the slot's top edge is {lip}"
+    );
+}
+
+/// The glow is light, and it has to behave like it: off both bands, on the picture side only,
+/// and gone before it reaches anything.
+#[test]
+fn the_edge_glow_falls_off_from_both_bands() {
+    let mut out = Vec::new();
+    draw_edge_glow(&mut out);
+    assert!(!out.is_empty(), "the glow drew nothing");
+    for d in &out {
+        assert!(tinted(d, edge()), "the glow is not the edge colour: {d:?}");
+        assert!(alpha(d) < 1.0, "the glow is not translucent: {d:?}");
+    }
+
+    // Away from a band, and never onto it. The top band ends at TOP_BAND_H and the bay starts
+    // at the lip line, and every band of the glow is on the far side of one of those two.
+    let bay = OUT_H as f32 - MOUTH_H;
+    for d in &out {
+        let q = quad(d);
+        let clears_top = q.y >= TOP_BAND_H - 0.01;
+        let clears_bay = q.y + q.h <= bay + 0.01;
+        assert!(
+            clears_top || clears_bay,
+            "a band of the glow sits on the case: {q:?}"
+        );
+    }
+
+    // Brightest at each edge, dimmer every step outward: a flat glow is a drawn border. Split by
+    // half of the screen, because both glows pass the "away from the case" test above and would
+    // otherwise be pooled into one list that falls to zero and then jumps back up to the second
+    // glow's first band.
+    let mid = OUT_H as f32 / 2.0;
+    let down: Vec<f32> = out.iter().filter(|d| quad(d).y < mid).map(alpha).collect();
+    let up: Vec<f32> = out.iter().filter(|d| quad(d).y >= mid).map(alpha).collect();
+    assert!(
+        down.len() > 1 && up.len() > 1,
+        "a glow has no falloff: {} down, {} up",
+        down.len(),
+        up.len()
+    );
+    for half in [&down, &up] {
+        for pair in half.windows(2) {
+            assert!(
+                pair[1] < pair[0],
+                "the glow does not dim as it goes: {half:?}"
+            );
+        }
+    }
+
+    // Both reach the same distance, which is what makes them one falloff read twice.
+    assert_eq!(down.len(), up.len(), "the two glows are not the same shape");
+    assert!(
+        (down[0] - up[0]).abs() < 0.001,
+        "the two glows do not start at the same brightness"
+    );
+    // Faint. This is light spilling onto a picture, not a second edge along it.
+    assert!(
+        down[0] < 0.3,
+        "the glow is too strong to be light: {}",
+        down[0]
+    );
+    // And cheap: it is a handful of quads, drawn every frame on a handheld.
+    assert!(
+        out.len() < 40,
+        "the glow costs too many quads: {}",
+        out.len()
     );
 }

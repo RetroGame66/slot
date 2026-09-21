@@ -70,13 +70,10 @@ uniform sampler2D u_mask;
 uniform vec2 u_src;
 uniform float u_bright;
 uniform mat3 u_cc;
-// The gamma the colour correction runs in. 1.0 multiplies straight in the encoded space, as the
-// picture did before this uniform existed: the two pow() calls are then inverses of one another
-// and cancel. 2.2 converts to linear, multiplies, and converts back.
-//
-// Saturation and a monochrome backlight mapping have to be done in linear or they come out flat,
-// which is what RetroArch's handheld shaders (nds-color, lcd1x_nds) do. Multiplying the encoded
-// value instead darkens a half-colour and washes a monochrome backlight out.
+// 色彩校正所在的 gamma：1.0 = 直接在编码空间乘（旧行为，两步 pow 互为逆）；
+// 2.2 = 先转线性、乘完再转回。饱和度与单色背光映射必须在线性空间里做才不发闷——
+// 这是 RetroArch 手持着色器（nds-color / lcd1x_nds）的通行做法，直接乘编码值会把
+// 「半彩」压暗、把单色背光冲淡。
 uniform float u_cc_gamma;
 varying vec2 v_uv;
 void main() {
@@ -84,8 +81,7 @@ void main() {
     c = pow(c, vec3(u_cc_gamma));
     c = u_cc * c;
     c = pow(max(c, vec3(0.0)), vec3(1.0 / u_cc_gamma));
-    // The panel mask still multiplies in the encoded space. Either order gives the same picture:
-    // both are multiplications, and multiplications commute.
+    // 面板遮罩照旧在编码空间乘（顺序与旧版等价：矩阵与遮罩都是乘法，可交换）。
     vec3 rgb = c * texture2D(u_mask, v_uv * u_src).rgb;
     FRAG_COLOR = vec4(rgb * u_bright, 1.0);
 }

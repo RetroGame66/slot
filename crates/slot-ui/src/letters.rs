@@ -1,13 +1,30 @@
-//! The shelf's letter ring: a second ring, above the cart row and on the same axis.
+//! The shelf's letter strip: a second ring, above the cart row and on the same axis.
 //!
 //! A Chinese library has no order of its own — the names are hanzi and the card hands them over
 //! in whatever order the directory listing has them — so the way to a particular game is a
 //! bucket. The shelf itself stays exactly what it was: one cart ring, left and right, seven
-//! carts wide. This is the dial above it, and it is the *same* ring shape one level up, which
-//! is why it reads without being explained: the marker in the middle is the letter the cart
-//! under the caret belongs to, and pressing up or down moves the marker and the shelf follows.
+//! carts wide. This is the index above it, and it is the *same* ring one level up, which is
+//! why it reads without being explained: the marker in the middle is the letter the cart under
+//! the caret belongs to, and pressing left or right moves the marker and the shelf follows.
 //!
-//! Every slot the alphabet has room for is laid out, whether or not the card uses it. A ring
+//! It used to be a drum — a second ring standing on its edge in a housing of its own, seven
+//! facets either side of the marker, each turned away from the eye by so many degrees. The
+//! turning was the one thing on the shelf that had no counterpart in the machine, and the strip
+//! it was drawn to replace is what it read as anyway. What took its place is the machine's own
+//! band at the top of the screen (`slot_chrome::draw_top_band`), mirrored from the cart bay at
+//! the bottom, with the letters laid flat inside its window: the same ring, read as an index
+//! printed along the case rather than as a wheel behind it.
+//!
+//! What came back with it is the *metal*. The drum's facets were separated by a raised ridge
+//! with a boss at each end — one piece of metal, seen at the three depths a seam, a ridge and a
+//! tooth are — and losing the drum lost that too, which left a row of letters with nothing
+//! between them. Laid flat, the same ridge is what makes the run read as a machined strip
+//! rather than as a line of type that happens to be in a slot. It is the one part of the old
+//! dial that was about the case rather than about the turning, so it is the one part that
+//! survives the ring being unrolled: the ridges no longer foreshorten, because nothing does any
+//! more, but they are the same shape at the same pitch and they travel with the letters.
+//!
+//! Every slot the alphabet has room for is laid out, whether or not the card uses it. A strip
 //! that closed up its gaps would put B next to C one cart apart on one card and two hundred
 //! apart on the next, and the distances would stop meaning anything; empty slots are drawn
 //! dim, are never centred, and are stepped over. `#` holds everything the table cannot read and
@@ -20,8 +37,8 @@ use crate::hud::Millis;
 /// Every bucket on the ring, in ring order. `#` first, and it holds everything that is not a
 /// letter: a title that opens with a digit, punctuation, or a character the pinyin table does
 /// not know. Putting it at an end keeps it out of the way of A, and keeping the digits off the
-/// ring at all is what leaves twenty-seven facets — the alphabet and the catch-all — which is
-/// a dial a hand can cross rather than a keyboard.
+/// ring at all is what leaves twenty-seven slots — the alphabet and the catch-all — which is
+/// an index a hand can cross in a moment rather than a keyboard.
 pub const SLOTS: [char; 27] = [
     '#', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R',
     'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
@@ -46,180 +63,89 @@ pub fn slot_label(slot: usize) -> char {
 // Layout
 // ---------------------------------------------------------------------------------------
 
-/// The arc one slot takes up on the drum, at the front where it faces the housing square on.
-/// Wide enough for the letter at its own size plus the gap that makes a run of them read as
-/// separate facets rather than as a word.
-const PITCH: f32 = 32.0;
+/// The whole widget, cut to four fifths.
+///
+/// The letters were sized to the window rather than to the band, and at full size the tallest of
+/// them came close enough to the band's lower lip that the eye read the strip as standing *on*
+/// that line instead of inside the opening above it — the line looked interrupted by the ink
+/// even though nothing crossed it. One knob rather than five: every dimension that describes the
+/// strip's shape multiplies by this, so the proportions stay the ones that were tuned and the
+/// lip keeps its distance at a size the band can carry.
+const SCALE: f32 = 0.8;
+
+/// How far apart two slots stand. The drum got its spacing from its own turning and needed no
+/// number of its own; laid flat along the band the strip has to be told one. A little over the
+/// marker's cap height, so the lit letter keeps some air on either side of it and the run does
+/// not read as a word.
+///
+/// This used to be thirty, and the number had a second job: `VISIBLE` slots either side of the
+/// marker came to exactly `cart::CART_W`, so the strip was the width of one cart on the row
+/// below. At four fifths it is deliberately narrower than that — the equality is gone on
+/// purpose, and what ends the strip now is the fade, not the window's edge.
+const PITCH: f32 = 30.0 * SCALE;
 
 /// Slots drawn either side of the marker.
 const VISIBLE: i32 = 4;
 
-/// The angle between two facets of the drum, and the one number the whole dial is built from:
-/// the letters, the ridges between them and the teeth those ridges carry all read their place
-/// off it.
+/// Where the strip starts giving up its light, and where it has none left, in pixels from the
+/// middle.
 ///
-/// A *drawn* angle rather than the ring's own. The ring has twenty-seven positions, and
-/// twenty-seven facets around a circle are thirteen and a third degrees each — `cos 13.3°` is
-/// 0.973, so a drum built to its own geometry is within three per cent of a flat row and looks
-/// like one. The facets are therefore spaced as if there were fewer of them still, which is
-/// the only way a drum reads as a drum: fourteen degrees is unmistakably a faceted surface, and
-/// it shows four either side of the marker before the surface has turned away.
-const FACET: f32 = 14.0 * std::f32::consts::PI / 180.0;
-
-/// The drum's radius, set so a facet is `PITCH` of arc at the front: the marker's neighbours
-/// then sit where the flat row put them, and it is the ones further out that pull in.
-const DRUM_R: f32 = PITCH / FACET;
-
-/// The capsule's height.
-const CAPSULE_H: f32 = 48.0;
-
-/// How far the drum's visible surface reaches either way: the seam half a facet past the last
-/// slot, which is where the teeth stop. A function rather than a constant because it is a sine
-/// and `f32::sin` is not const — and one function rather than the number written down twice,
-/// because the housing and the teeth have to agree about where the drum ends.
-fn drum_reach() -> f32 {
-    drum((VISIBLE as f32 + 0.5) * FACET).0
-}
-
-/// The capsule's width: the drum's visible surface plus the radius of an end cap. The caps are
-/// what closes the housing off past the teeth, and the drum runs on behind them.
-fn capsule_w() -> f32 {
-    2.0 * (drum_reach() + CAPSULE_H / 2.0)
-}
-
-/// The capsule's top edge: the drum is centred halfway between the top of the screen and the top
-/// of the cart under the caret.
+/// Measured in slots rather than in pixels, which is the one pair of numbers here that is *not*
+/// multiplied by `SCALE`: the fade is a property of the strip's own shape — how many letters
+/// out it starts dissolving — so it has to follow the pitch or a rescale silently kills it. It
+/// very nearly did: scaled, the outermost slot would have come out at 96 against a threshold of
+/// 104, every letter at full ink, and the strip would have ended on a hard edge inside the
+/// window, which is exactly what this exists to prevent. Fading is what keeps a letter from
+/// being cut off by a straight line, the one thing that would give the band away as a rectangle
+/// drawn over the screen rather than an opening in the case.
 ///
-/// The cart under the caret and not a side one — it is drawn at `CENTER_SCALE` and is the tall
-/// one, and it is the one the drum must not look like it is resting on. `shelf::FOOT_Y` is where
-/// the row stands, so that cart's top is the foot less its height, and the middle of what is left
-/// above it is the only place this dial has ever really had.
-const CAPSULE_Y: f32 =
-    (crate::shelf::FOOT_Y - crate::cart::CART_H as f32 * crate::shelf::CENTER_SCALE) / 2.0
-        - CAPSULE_H / 2.0;
+/// Three slots out to four and a half: the fourth letter each side arrives at a third of its
+/// ink and the fifth is gone, so the run dissolves before the window's edge rather than at it.
+const FADE_FROM: f32 = 3.0 * PITCH;
+const FADE_TO: f32 = 4.5 * PITCH;
 
-// ---------------------------------------------------------------------------------------
-// The rail: the same housing, stood on its end down the right-hand edge
-// ---------------------------------------------------------------------------------------
+/// How tall the whole widget is: the letters and the metal between them, from the top of a ridge
+/// to the bottom of one.
+///
+/// Sized off the window rather than off the type, and inset from it the way the drum's ridges
+/// were inset from its housing: the ridges are the frame the letters are read through, so their
+/// ends are what has to sit inside the opening rather than touch it. Thirty of the window's
+/// thirty-six, three clear at each end.
+const MODULE_H: f32 = crate::slot_chrome::TOP_WIN_H - 2.0 * RIDGE_INSET;
 
-/// A quarter turn clockwise. Both the housing and the ridges are drawn rotated rather than
-/// rasterised again: one texture per object, whatever way round it is being looked at.
-const QUARTER_TURN: f32 = std::f32::consts::FRAC_PI_2;
+/// Where the widget's middle is: the middle of the *band*, not of the window.
+///
+/// The window is not centred in the band — it stands twelve pixels down from the top of a
+/// fifty-eight pixel band and ten up from the bottom — so a strip centred on the window reads as
+/// sitting low in the case, which is what it looked like. The band is the thing the eye sees as
+/// one object, so the band is what the strip is centred on.
+///
+/// This is also what keeps the lip honest without a nudge. The old strip carried a three pixel
+/// lift purely to get its ink off that line, because centred on the window's middle it was
+/// closer to the bottom of the opening than to the top. Centred on the band, the bottom of the
+/// widget lands at 44 against a lip at 56 — twelve clear, the same margin the lip test asks of
+/// the letters — so the lift has nothing left to do and is gone.
+const MODULE_MID: f32 = crate::slot_chrome::TOP_BAND_H / 2.0;
 
-/// What the rail clears either side of itself: ten pixels off the right edge, which is what the
-/// housing's own shadow needs to stay inside the panel rather than be clipped by it.
-const RAIL_MARGIN: f32 = 10.0;
-
-/// Where the rail runs, horizontally. Standing the housing up puts `CAPSULE_H` — its height,
-/// which is a facet's whole opening — across the panel, so that is the width it asks for.
-fn rail_cx() -> f32 {
-    crate::draw::OUT_W as f32 - RAIL_MARGIN - CAPSULE_H / 2.0
-}
-
-/// Where its marker sits, vertically: halfway up the cart under the caret, which is the cart
-/// whose letter the marker is a readout of. Derived from the row's own foot the way
-/// `CAPSULE_Y` is, so a row that stands somewhere else carries the rail with it.
-fn rail_cy() -> f32 {
-    crate::shelf::FOOT_Y - crate::cart::CART_H as f32 * crate::shelf::CENTER_SCALE / 2.0
-}
-
-/// How much of the light a facet keeps when it has turned fully away. Not zero: the end slots
-/// are context — which letters the library has either side of the marker — and context that
-/// has gone black is not context.
-const DEPTH_FLOOR: f32 = 0.55;
-
-/// Where a slot sits across the drum, and how much of the surface it still shows, for a given
-/// angle from the marker. `sin` places it, `cos` is what is left of it facing the housing.
-fn drum(angle: f32) -> (f32, f32) {
-    (DRUM_R * angle.sin(), angle.cos().max(0.0))
-}
-
-/// The ring's spring. Snappier than the cart row's: a dial is small, and a letter that took as
-/// long to arrive as a cartridge does would not read as a dial being turned.
+/// The ring's spring. Snappier than the cart row's: a strip is a small thing, and a letter that
+/// took as long to arrive as a cartridge does would not read as an index being stepped through.
 const OMEGA: f32 = 20.0;
-
-/// One ridge and its size, in pixels: the raised knuckle between two facets.
-///
-/// It is not a line but a piece of metal seen at three heights — a beveled crest down the
-/// middle, and a wider boss at each end where it meets the rim. That boss is the tooth, and
-/// having it and the crest be one texture is what makes the drum and the gear the same object:
-/// a seam, a ridge and a tooth are the same ridge passed at different depths, so they are not
-/// three things to keep in agreement.
-const RIDGE_W: u32 = 9;
-
-/// How far the ridge stops short of the housing either end. The letters are 26 tall in a 48
-/// capsule, so there are eleven pixels above and below them for the rim to show through.
-const RIDGE_INSET: f32 = 3.0;
-
-fn ridge_h() -> f32 {
-    CAPSULE_H - 2.0 * RIDGE_INSET
-}
-
-/// The ink a ridge is drawn in, and how much it fades at the far side of the drum. Its peak is
-/// deliberately below the dimmest letter: a slot with nothing in it is ink at `EMPTY`, and the
-/// rim is metal *behind* the letters rather than another state of them. A ridge as bright as an
-/// empty slot would be a drum where every seam looked like a letter nobody can read.
-const RIDGE_INK: [u8; 3] = [0xd8, 0xd4, 0xcc];
-const RIDGE_PEAK: f32 = 0.20;
-const RIDGE_FLOOR: f32 = 0.75;
-
-/// How far the housing's shadow reaches past it, and how dark the drum goes at its ends.
-const HALO: f32 = 5.0;
-const DRUM_DARK: f32 = 8.0;
-const DRUM_LIT: f32 = 34.0;
-
-/// The housing's fill, and the bevel that makes it an opening rather than a shape.
-///
-/// Heavier than the HUD plate it used to match, and that is the skeuomorphism rather than a
-/// drift: the plate is a translucent panel and this is a recessed window with a drum behind it.
-/// At the plate's 0.72 a bright wallpaper lifts the drum's whole ladder, and the dim states —
-/// which are the ones that carry the information — are what loses its footing first.
-const CAPSULE: [f32; 4] = [0.0, 0.0, 0.0, 0.88];
-
-/// The bevel: what a lit top edge and a shadowed bottom one are, as a lift on the housing's
-/// own colour. Both are drawn inside the rim, where the metal of the surround would catch the
-/// light.
-const BEVEL_LIP: f32 = 22.0;
-const BEVEL_SHADE: f32 = 10.0;
-
-/// The bezel: how wide the housing's own rim is, and how bright.
-///
-/// A rim is the whole answer to "make it sit on the wallpaper", and the reason is that it is the
-/// only part of the drawing that does not depend on the wallpaper. A shadow does nothing on a
-/// dark one, which is exactly what this shelf has: the top of the screen comes out at 9 to 19,
-/// and a nearly black housing against it has no edge at all. A rim does not care — it is brighter
-/// than the housing and darker than a letter, so it reads as an object either way.
-///
-/// Lit at the top and in its own shadow at the bottom, like the lip and shade inside it: the same
-/// light, one step further out.
-const BEZEL: f32 = 1.6;
-const BEZEL_TOP: f32 = 68.0;
-const BEZEL_FOOT: f32 = 30.0;
-
-/// Ink for the three states, as a fraction of the letters' own colour.
-///
-/// Only brightness, and deliberately: a slot with nothing in it still has to read as a slot, so
-/// it cannot be invisible, and the marker has to read as *chosen*, so the neighbour cannot be
-/// near it. The other reason there is no hue here is that the tree has exactly one warning
-/// colour — `ALERT_INK` — and a dial that borrowed it would spend it on nothing.
-///
-/// The floor is set by the worst background rather than the best: the housing is 88% black, so
-/// over a bright wallpaper it lands around a fifth of the letters' own luminance, and ink much
-/// below a third of it disappears into that.
-const EMPTY: f32 = 0.34;
-const NEIGHBOUR: f32 = 0.68;
 
 /// Before a held key steps a second letter. Longer than the cart row's: a press is a
 /// deliberate move to a named letter, and two of those from one tap would be two letters of
 /// an alphabet the user is reading.
 const REPEAT_DELAY_MS: Millis = 450;
 
-/// Between repeats after that. Faster than the cart row's — a dial is a coarse control, and
+/// Between repeats after that. Faster than the cart row's — an index is a coarse control, and
 /// the whole alphabet should be a couple of seconds away rather than twenty.
 const REPEAT_MS: Millis = 130;
 
-/// The ink a letter is drawn in, and the size it is rasterised at.
-pub const INK: [u8; 3] = [0xf5, 0xf2, 0xef];
+/// The ink a letter is drawn in. The palette's, because the window it is set on is the case's
+/// `opening` and that flips with the mode — a fixed light ink would be dark type's background in
+/// one mode and its own colour in the other.
+fn ink() -> [u8; 3] {
+    crate::palette::ink()
+}
 
 /// The size a letter is rasterised at, before it is cropped to its ink and scaled to one of
 /// the two sizes below.
@@ -232,18 +158,75 @@ pub const FACE_PX: f32 = 40.0;
 ///
 /// These are heights and not box sizes, because the face is cropped to its ink first — a
 /// letter drawn at a size that included its own leading would come out at about half of it,
-/// which is a dial set in type too small to read from where a handheld is held.
-const CENTRE_PX: f32 = 26.0;
-const NEIGHBOUR_PX: f32 = 18.0;
+/// which is an index set in type too small to read from where a handheld is held.
+///
+/// The marker's is also what the band's window has to carry: at full size it was twenty-six in
+/// a thirty-six pixel opening, five pixels of air above and below, and that was too tight
+/// against the lip. At four fifths it is 20.8 — five and a half clear of the ridge ends above
+/// and below it, and twenty-two clear of the lit lip, which is air the strip did not have when
+/// it was centred on the window rather than on the band.
+const CENTRE_PX: f32 = 26.0 * SCALE;
+const NEIGHBOUR_PX: f32 = 18.0 * SCALE;
 
-/// The capsule texture's size, for the caller building it: the housing plus the shadow it casts
-/// all round, which the texture has to carry because the draw list has no soft edges.
-pub fn capsule_size() -> (u32, u32) {
-    (
-        (capsule_w() + 2.0 * HALO).round() as u32,
-        (CAPSULE_H + 2.0 * HALO).round() as u32,
-    )
-}
+/// Ink for the three states, as a fraction of the letters' own colour.
+///
+/// Only brightness, and deliberately: a slot with nothing in it still has to read as a slot, so
+/// it cannot be invisible, and the marker has to read as *chosen*, so the neighbour cannot be
+/// near it. The other reason there is no hue here is that the tree has exactly one warning
+/// colour — `ALERT_INK` — and an index that borrowed it would spend it on nothing.
+///
+/// The floor is set by the worst background rather than the best: the window is `opening`, which
+/// is nearly black, so ink much below a third of the letters' own luminance disappears into it.
+const EMPTY: f32 = 0.34;
+const NEIGHBOUR: f32 = 0.68;
+
+// ---------------------------------------------------------------------------------------
+// The metal between two slots
+// ---------------------------------------------------------------------------------------
+
+/// One ridge and its size, in pixels: the raised knuckle between two facets.
+///
+/// It is not a line but a piece of metal seen at three heights — a beveled crest down the
+/// middle, and a wider boss at each end where it meets the rim. That boss is the tooth, and
+/// having it and the crest be one texture is what made the drum and the gear the same object:
+/// a seam, a ridge and a tooth are the same ridge passed at different depths, so they are not
+/// three things to keep in agreement. Laid flat there is only one depth left, and the shape is
+/// the same shape.
+const RIDGE_W: u32 = 9;
+
+/// How far a ridge stops short of the window either end, and so what `MODULE_H` is measured
+/// back from. The drum's own inset, kept: the metal ends where the opening does rather than
+/// running into the frame around it.
+const RIDGE_INSET: f32 = 3.0;
+
+/// The ink a ridge is drawn in, and its peak alpha.
+///
+/// The peak is deliberately below the dimmest letter: a slot with nothing in it is ink at
+/// `EMPTY`, and this is metal *behind* the letters rather than another state of them. A ridge as
+/// bright as an empty slot would be a strip where every seam looked like a letter nobody can
+/// read.
+///
+/// The colour is the palette's, because metal behind light type and metal behind dark type are
+/// not the same metal: light in the dark mode, where it is a highlight on a dark window, and
+/// dark in the light one, where the window has gone pale and a light ridge would vanish into it.
+const RIDGE_PEAK: f32 = 0.20;
+
+/// Where the metal starts giving up, and where it has none left, in pixels from the middle.
+///
+/// Further out than the letters' own fade, and that is the point rather than an accident. The
+/// outermost ridge stands half a slot past the outermost letter — it is there so the strip
+/// carries on beyond the last thing it can name, which is what the drum's row of teeth did — and
+/// fading it on the letters' curve would put it exactly on zero: drawn, and invisible, with the
+/// run ending on a letter and no seam beyond it. Measured in slots like the letters' fade, so a
+/// rescale cannot silently kill this one either.
+const RIDGE_FADE_FROM: f32 = 3.5 * PITCH;
+const RIDGE_FADE_TO: f32 = 5.5 * PITCH;
+
+/// The metal is a highlight behind the letters, never another state of them: a ridge as bright as
+/// an empty slot would be a strip where every seam looked like a letter nobody can read. Held as
+/// a fact the compiler checks rather than as a test, the way `battery` holds its gauge's
+/// proportions — the two numbers are what would drift, and they drift together in a diff.
+const _: () = assert!(RIDGE_PEAK < EMPTY);
 
 // ---------------------------------------------------------------------------------------
 // Faces
@@ -265,9 +248,57 @@ pub fn letter_face(ch: char) -> CartFace {
     if let Some(font) = crate::text::label_font() {
         let text = ch.to_string();
         let layout = crate::text::fit(font, &text, box_px as f32, 1, FACE_PX, FACE_PX * 0.7);
-        crate::text::draw_centred(&mut rgba, box_px, box_px, &layout, INK);
+        crate::text::draw_centred(&mut rgba, box_px, box_px, &layout, ink());
     }
     crop_to_ink(rgba, box_px, box_px)
+}
+
+/// One ridge with its teeth, as a face.
+///
+/// A crest down the middle — lit on the side the light comes from, in shadow on the other — and
+/// a wider boss at each end. The boss is what reads as a tooth, and the whole thing is one
+/// texture because a seam, a ridge and a tooth are the same piece of metal; drawn as three
+/// shapes they would be three things that had to be kept in agreement.
+///
+/// Carried over from the drum unchanged in every way that is not a consequence of the ring
+/// being unrolled: the same nine pixels across, the same seven-pixel boss, the same lit half and
+/// shadowed half. What is gone is the depth — flat, every ridge is drawn at its full width and
+/// full alpha rather than scaled by how far the drum has turned — which is what the letters
+/// gave up when they were laid flat too.
+pub fn ridge_face() -> CartFace {
+    let (w, h) = (RIDGE_W, MODULE_H.round() as u32);
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    let (fw, fh) = (w as f32, h as f32);
+    let mid = fw / 2.0;
+    let metal = crate::palette::ridge_ink();
+    // How far down the ridge the boss ends and the crest starts.
+    let boss = 7.0;
+    for y in 0..h {
+        for x in 0..w {
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            // The knob is a rounded end; the crest is a thin shaft between two of them.
+            let t = (py / boss).min((fh - py) / boss).clamp(0.0, 1.0);
+            let width = 1.0 + 3.0 * t; // half-width of the shaft, in pixels
+            let off = (px - mid).abs();
+            if off > width {
+                continue;
+            }
+            // Metal: the light comes from above, so the half towards the top of the ridge is
+            // the lit one and the far half is in its own shadow.
+            let across = (px - mid) / width;
+            let face = if py < fh / 2.0 {
+                1.0 - 0.55 * (across + 1.0) / 2.0
+            } else {
+                0.45 - 0.30 * (across + 1.0) / 2.0
+            };
+            let soft = (1.0 - (off / width).powi(3)).clamp(0.0, 1.0);
+            let a = (RIDGE_PEAK * face.max(0.0) * soft * 255.0).round() as u8;
+            let i = ((y * w + x) * 4) as usize;
+            rgba[i..i + 4].copy_from_slice(&[metal[0], metal[1], metal[2], a]);
+        }
+    }
+    CartFace { rgba, w, h }
 }
 
 /// The smallest box holding every pixel that got ink. A face with no ink at all comes back as
@@ -306,127 +337,6 @@ fn crop_to_ink(rgba: Vec<u8>, w: u32, h: u32) -> CartFace {
     }
 }
 
-/// The housing, as a face: a recessed window with a drum behind it and a shadow under it.
-///
-/// Drawn as a texture rather than as a rectangle for the two things a rectangle cannot do. The
-/// ends are round, which is the difference between a piece of furniture and a debug overlay.
-/// And the inside is a *ramp* — dark at both ends, lightest in the middle — which is what a
-/// cylinder looks like: the middle of the drum faces the eye square on, and everything towards
-/// the ends is turning away and catching less of the light. That ramp is the same `cos` the
-/// letters are placed and lit by, so the drum's shading and its movement agree about the shape.
-///
-/// The shadow outside it is what keeps it off the wallpaper. Baked here rather than drawn as a
-/// second quad because it is a soft edge, and the draw list has no soft edges.
-pub fn capsule_face(w: u32, h: u32) -> CartFace {
-    let mut rgba = vec![0u8; (w * h * 4) as usize];
-    let (fw, fh) = (w as f32, h as f32);
-    // The body inside the shadow, in this texture's own coordinates.
-    let (bx, by) = (HALO, HALO);
-    let (bw, bh) = (fw - 2.0 * HALO, fh - 2.0 * HALO);
-    let r = bh / 2.0;
-    let cy = by + r;
-    let mid = bx + bw / 2.0;
-    for y in 0..h {
-        for x in 0..w {
-            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-            // Distance to the housing's outline, negative inside. One number for all three of
-            // the bands — the shadow outside, the bezel, and what is left of the drum in the
-            // middle — so they cannot end up describing different shapes.
-            let along = (px - (bx + r)).clamp(0.0, bw - 2.0 * r);
-            let d = ((px - (bx + r + along)).powi(2) + (py - cy).powi(2)).sqrt() - r;
-            let i = ((y * w + x) * 4) as usize;
-            if d >= HALO {
-                continue;
-            }
-            if d >= 0.0 {
-                // Outside: the shadow it casts. Squared, so it is dense against the housing and
-                // gone by `HALO` — which is what seats it on the wallpaper instead of leaving it
-                // looking laid on top of one.
-                let a = 1.0 - d / HALO;
-                rgba[i..i + 4].copy_from_slice(&[0, 0, 0, (a * a * 0.55 * 255.0).round() as u8]);
-                continue;
-            }
-            let inset = -d;
-            let lit = if inset < BEZEL {
-                // The bezel: the one part of this that is not the drum. A rim with a brightness
-                // of its own is what an object sitting on a wallpaper needs, and it is the only
-                // thing here that works on a dark one — a shadow on black is nothing, and without
-                // a rim the housing is a dark pill with letters in it that has no edge at all.
-                if py < cy {
-                    BEZEL_TOP
-                } else {
-                    BEZEL_FOOT
-                }
-            } else {
-                // Inside the bezel: the drum's ramp, then the lip and shade just within the rim.
-                let t = ((px - mid) / (bw / 2.0)).clamp(-1.0, 1.0);
-                let shallow = (1.0 - t * t).max(0.0).sqrt();
-                let ramp = DRUM_DARK + (DRUM_LIT - DRUM_DARK) * shallow;
-                let bevel = (1.0 - (inset - BEZEL) / 3.0).clamp(0.0, 1.0);
-                if py < cy {
-                    ramp + BEVEL_LIP * bevel
-                } else {
-                    ramp - BEVEL_SHADE * bevel
-                }
-            };
-            let lit = lit.clamp(0.0, 255.0);
-            // Steel: a touch of blue in the dark, so the ramp reads as metal rather than as a
-            // grey gradient. The alpha is the housing's own, and it is nearly opaque — see
-            // `CAPSULE` for why this one is not the HUD plate's 0.72. The outline's last pixel is
-            // feathered rather than sampled, which is what having the distance is for.
-            let cover = (0.5 - d).clamp(0.0, 1.0);
-            rgba[i..i + 4].copy_from_slice(&[
-                (lit * 0.98).round() as u8,
-                lit.round() as u8,
-                (lit * 1.06).min(255.0).round() as u8,
-                (CAPSULE[3] * cover * 255.0).round() as u8,
-            ]);
-        }
-    }
-    CartFace { rgba, w, h }
-}
-
-/// One ridge with its teeth, as a face.
-///
-/// A crest down the middle — lit on the side the light comes from, in shadow on the other —
-/// and a wider boss at each end. The boss is what reads as a tooth, and the whole thing is one
-/// texture because a seam, a ridge and a tooth are the same piece of metal; drawn as three
-/// shapes they would be three things that had to be kept in agreement.
-pub fn ridge_face() -> CartFace {
-    let (w, h) = (RIDGE_W, ridge_h().round() as u32);
-    let mut rgba = vec![0u8; (w * h * 4) as usize];
-    let (fw, fh) = (w as f32, h as f32);
-    let mid = fw / 2.0;
-    // How far down the ridge the boss ends and the crest starts.
-    let boss = 7.0;
-    for y in 0..h {
-        for x in 0..w {
-            let px = x as f32 + 0.5;
-            let py = y as f32 + 0.5;
-            // The knob is a rounded end; the crest is a thin shaft between two of them.
-            let t = (py / boss).min((fh - py) / boss).clamp(0.0, 1.0);
-            let width = 1.0 + 3.0 * t; // half-width of the shaft, in pixels
-            let off = (px - mid).abs();
-            if off > width {
-                continue;
-            }
-            // Metal: the light comes from above, so the half towards the top of the ridge is
-            // the lit one and the far half is in its own shadow.
-            let across = (px - mid) / width;
-            let face = if py < fh / 2.0 {
-                1.0 - 0.55 * (across + 1.0) / 2.0
-            } else {
-                0.45 - 0.30 * (across + 1.0) / 2.0
-            };
-            let soft = (1.0 - (off / width).powi(3)).clamp(0.0, 1.0);
-            let a = (RIDGE_PEAK * face.max(0.0) * soft * 255.0).round() as u8;
-            let i = ((y * w + x) * 4) as usize;
-            rgba[i..i + 4].copy_from_slice(&[RIDGE_INK[0], RIDGE_INK[1], RIDGE_INK[2], a]);
-        }
-    }
-    CartFace { rgba, w, h }
-}
-
 // ---------------------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------------------
@@ -439,7 +349,7 @@ pub struct Letters {
     target: usize,
     /// The direction being held and when it next fires, in the same shape the cart row keeps
     /// it: the repeat lives here rather than in the gesture layer so that nothing in a game
-    /// starts reading the up and down keys.
+    /// starts reading the left and right shoulders.
     held: Option<(i32, Millis)>,
 }
 
@@ -464,9 +374,9 @@ impl Letters {
         self.target
     }
 
-    /// Where the strip is, continuously. Every part of the dial — where a letter sits, how much
-    /// of it shows, where the teeth are — is read off this, so they all move as one piece. The
-    /// spring is what keeps it off the whole numbers.
+    /// Where the strip is, continuously. Every part of it — where a letter sits and how much of
+    /// it shows — is read off this, so they all move as one piece. The spring is what keeps it
+    /// off the whole numbers.
     pub fn scroll(&self) -> f32 {
         self.scroll
     }
@@ -478,7 +388,7 @@ impl Letters {
     }
 
     /// Puts the marker on a letter without travelling there, for the first frame of a session:
-    /// there is no previous position to turn from, and a strip that arrived from `#` would be
+    /// there is no previous position to travel from, and a strip that arrived from `#` would be
     /// the shelf's first movement being one nobody asked for.
     pub fn snap_to(&mut self, initial: char) {
         self.target = slot_of(initial);
@@ -497,8 +407,8 @@ impl Letters {
         let accel = -2.0 * OMEGA * self.vel - OMEGA * OMEGA * (self.scroll - self.scroll_target());
         self.vel += accel * dt;
         self.scroll += self.vel * dt;
-        // Land, rather than creeping: an exponential tail on a dial is visible as a letter that
-        // is almost in place.
+        // Land, rather than creeping: an exponential tail on an index is visible as a letter
+        // that is almost in place.
         if (self.scroll - self.scroll_target()).abs() < 0.001 && self.vel.abs() < 0.01 {
             self.scroll = self.scroll_target();
             self.vel = 0.0;
@@ -513,8 +423,8 @@ impl Letters {
     ///
     /// `N - 1` candidates and not `N`: walking the whole ring comes back to the slot it set out
     /// from, and a card whose entire library is one letter has every direction lead there. That
-    /// is not a move, and reporting it as one leaves a held key repeating forever at a dial
-    /// that never turns.
+    /// is not a move, and reporting it as one leaves a held key repeating forever at an index
+    /// that never moves.
     pub fn step(&mut self, by: i32, counts: &[usize; N]) -> bool {
         if by == 0 {
             return false;
@@ -575,92 +485,94 @@ impl Letters {
         self.held = None;
     }
 
-    /// The draws. `capsule` is the housing the drum shows through and `ridge` the piece of
-    /// metal between two facets; either missing costs the dial that piece and nothing else.
+    /// The strip, drawn into the band's window. The band itself is the machine's, so it is
+    /// drawn by `slot_chrome`; this draws the letters, and the metal between them, and nothing
+    /// else.
     ///
     /// `faces` are the slot's textures with the size each was rasterised at, because a letter
     /// cropped to its ink is as wide as it is and no wider: drawing it into a square would set
-    /// every letter to the same width, which is a dial set in a typewriter's face rather than
-    /// in this one.
-    pub fn draw(
+    /// every letter to the same width, which is an index set in a typewriter's face rather than
+    /// in this one. `ridge` is the one piece of metal the strip repeats; `None` costs the strip
+    /// that piece and nothing else, the same way a missing cart face costs a cart its label.
+    ///
+    /// Flat, and that is the design rather than a simplification. A drum could only ever show
+    /// its middle facet square on, so everything else on it was narrower and dimmer than what
+    /// the marker held — which meant the eye had to be taught that the dim ones were the same
+    /// letters. Along an opening in the case, the letters are all at the same depth and the
+    /// only thing that separates the marker from its neighbours is the ink, which is what the
+    /// three states below are for. The ridges are flat with them: full width, and fading only
+    /// with distance from the marker rather than with the angle they stand at.
+    pub fn draw_strip(
         &self,
-        capsule: Option<(TexId, u32, u32)>,
         faces: &[(TexId, u32, u32)],
+        ridge: Option<(TexId, u32, u32)>,
         counts: &[usize; N],
-        ridge: Option<TexId>,
         out: &mut Vec<Draw>,
     ) {
         let cx = crate::draw::OUT_W as f32 / 2.0;
-        if let Some((tex, w, h)) = capsule {
-            // The texture carries `HALO` of shadow all round the housing, so its corner is
-            // that much above and left of the housing's own.
-            out.push(Draw::Tex {
-                x: cx - w as f32 / 2.0,
-                y: CAPSULE_Y - HALO,
-                w: w as f32,
-                h: h as f32,
-                tex,
-                alpha: 1.0,
-            });
-        }
-
-        // Where the drum is between two slots. Every part of what follows is a function of a
-        // slot's angle from the marker, and the fraction is what lets a slot be caught midway
+        // Where the widget's middle is: the middle of the band. Not the middle of the window —
+        // the window is not centred in the band — and not the window less a nudge either; both
+        // of those are what `MODULE_MID` is written out to replace.
+        let mid = MODULE_MID;
+        // Where the strip is between two slots. Everything below is a function of a slot's
+        // distance from the marker, and the fraction is what lets a slot be caught midway
         // between two of them rather than snapped to one.
         let frac = self.scroll - self.scroll.round();
-        let mid_y = CAPSULE_Y + CAPSULE_H / 2.0;
         let sub = self.scroll.round() as i32;
 
-        // The ridge between two facets, drawn before the letters because the letter sits on the
-        // facet and the ridge is the raised join beside it.
+        // How much of its ink the strip still has this far out. Two curves, and the second is
+        // wider than the first on purpose: the metal reaches half a slot past the last letter,
+        // and a ridge faded on the letters' own curve would arrive at that half slot with
+        // nothing left to draw — see `RIDGE_FADE_FROM`.
+        let letter_fade = |off: f32| {
+            let dx = (off * PITCH).abs();
+            (1.0 - (dx - FADE_FROM) / (FADE_TO - FADE_FROM)).clamp(0.0, 1.0)
+        };
+        let metal_fade = |off: f32| {
+            let dx = (off * PITCH).abs();
+            (1.0 - (dx - RIDGE_FADE_FROM) / (RIDGE_FADE_TO - RIDGE_FADE_FROM)).clamp(0.0, 1.0)
+        };
+
+        // The metal first, because the letters sit *on* the strip and the ridge is the raised
+        // join beside them — the order the drum drew them in, and the reason a seam never ends
+        // up drawn across a letter.
         //
-        // One per *boundary* of the facets being drawn, and the facets drawn run half a slot
-        // past the last letter either way — so there is a ridge past each end of the readable
-        // row, and the drum visibly carries on behind the housing instead of stopping at the
-        // outermost letter. That is `2 * VISIBLE + 2` of them, from `-(VISIBLE + 0.5)` to
-        // `+(VISIBLE + 0.5)` in slot units: an odd count would be the drum off centre.
-        if let Some(tex) = ridge {
-            for b in 0..=VISIBLE * 2 + 1 {
-                // `- frac` is what makes the metal turn with the letters. Without it the ridges
-                // sit still and the drum slides through them, which is a glass tube with lines
-                // drawn on it.
-                let angle = (b as f32 - (VISIBLE as f32 + 0.5) - frac) * FACET;
-                let (x, depth) = drum(angle);
-                if depth <= 0.0 || x.abs() > drum_reach() + RIDGE_W as f32 / 2.0 {
+        // At the boundaries rather than at the slots: half a slot out either way from the
+        // marker, which is ten ridges for nine letters, and one past each end so the strip
+        // visibly carries on rather than stopping at the last thing it can name.
+        if let Some((tex, rw, rh)) = ridge {
+            for boundary in -VISIBLE..=VISIBLE + 1 {
+                let off = boundary as f32 - 0.5 - frac;
+                let fade = metal_fade(off);
+                if fade <= 0.0 {
                     continue;
                 }
-                // Turned away, the ridge is both narrower and fainter — the one is the surface
-                // foreshortening and the other is less of it catching the light.
-                let w = (RIDGE_W as f32 * depth).max(1.0);
+                // Flat, there is no narrowing to do: the ridge is drawn at its own width and
+                // dimmed only by how far out it stands. The drum's floor is gone with the
+                // turning it existed for.
+                let w = rw as f32;
+                let h = rh as f32;
                 out.push(Draw::Tex {
-                    x: cx + x - w / 2.0,
-                    y: CAPSULE_Y + RIDGE_INSET,
+                    x: cx + off * PITCH - w / 2.0,
+                    y: mid - h / 2.0,
                     w,
-                    h: ridge_h(),
+                    h,
                     tex,
-                    alpha: RIDGE_FLOOR + (1.0 - RIDGE_FLOOR) * depth,
+                    alpha: fade,
                 });
             }
         }
 
-        // The letters, on the facets between them. A slot's place across the housing is the
-        // front of the drum seen side-on — `R sin θ` — so they bunch up as they go, and how
-        // much of the letter is left is `cos θ`: the pane has turned away from the eye, and a
-        // letter does not merely shrink, it narrows.
         for slot in -VISIBLE..=VISIBLE {
             let at = (sub + slot).rem_euclid(N as i32) as usize;
             let Some(&(tex, fw, fh)) = faces.get(at) else {
                 continue;
             };
-            let offset = slot as f32 - frac;
-            let (x, depth) = drum(offset * FACET);
-            if depth <= 0.0 {
-                continue;
-            }
+            let off = slot as f32 - frac;
             // How much of the marker a letter is. The marker is the only one at full height,
-            // and the one arriving becomes it as it comes, which is what a step of the dial
+            // and the one arriving becomes it as it comes, which is what a step of the index
             // looks like rather than a swap.
-            let reach = offset.abs().min(1.0);
+            let reach = off.abs().min(1.0);
             let h = CENTRE_PX + (NEIGHBOUR_PX - CENTRE_PX) * reach;
             // Three states. The marker is never on an empty slot — `step` skips them and the
             // caret's own letter always has at least the cart it is on — so the dim one is
@@ -672,114 +584,20 @@ impl Letters {
             } else {
                 NEIGHBOUR
             };
-            let lit = DEPTH_FLOOR + (1.0 - DEPTH_FLOOR) * depth;
-            out.push(Draw::Tex {
-                x: cx + x - h * depth * fw as f32 / fh as f32 / 2.0,
-                y: mid_y - h / 2.0,
-                w: h * depth * fw as f32 / fh as f32,
-                h,
-                tex,
-                alpha: state * lit,
-            });
-        }
-    }
-
-    /// The same ring stood on its end: a rail down the right-hand edge of the panel rather
-    /// than a dial above the row.
-    ///
-    /// Nothing here decides which slot is under the marker or how it got there — that is the
-    /// whole of `Letters`, and this only draws it. One map, two views, is the point: swapping
-    /// between them cannot leave two copies of the ring disagreeing about where the library is.
-    ///
-    /// The drum is turned on its side rather than redrawn as a flat list: the facets still
-    /// bunch up towards the ends and one letter plainly owns the middle. A table of contents at
-    /// the edge of the screen loses that cue, and loses with it the sense that this is the same
-    /// control the dial is.
-    pub fn draw_rail(
-        &self,
-        capsule: Option<(TexId, u32, u32)>,
-        faces: &[(TexId, u32, u32)],
-        counts: &[usize; N],
-        ridge: Option<TexId>,
-        out: &mut Vec<Draw>,
-    ) {
-        let cx = rail_cx();
-        let cy = rail_cy();
-        if let Some((tex, w, h)) = capsule {
-            // The housing `draw` uses, turned a quarter turn about its own centre. Turned and
-            // not baked again, so it cannot drift from the dial's; at its own size, so the end
-            // caps stay round — a second rectangle stretched to fit would oval them.
-            out.push(Draw::Turned {
-                x: cx - w as f32 / 2.0,
-                y: cy - h as f32 / 2.0,
-                w: w as f32,
-                h: h as f32,
-                tex,
-                alpha: 1.0,
-                turn: QUARTER_TURN,
-            });
-        }
-
-        let frac = self.scroll - self.scroll.round();
-        let sub = self.scroll.round() as i32;
-
-        // The ridges, ahead of the letters for the reason they go first on the dial: the letter
-        // sits on the facet, and the ridge is the raised join beside it. `- frac` is doing the
-        // same work it does there — without it the metal stays put and the rail slides through
-        // it like a glass tube with lines drawn on.
-        if let Some(tex) = ridge {
-            for b in 0..=VISIBLE * 2 + 1 {
-                let angle = (b as f32 - (VISIBLE as f32 + 0.5) - frac) * FACET;
-                let (along, depth) = drum(angle);
-                if depth <= 0.0 || along.abs() > drum_reach() + RIDGE_W as f32 / 2.0 {
-                    continue;
-                }
-                // The thickness is what is left of the metal facing the eye; the length is the
-                // opening it spans, and that does not change as it turns away.
-                let t = (RIDGE_W as f32 * depth).max(1.0);
-                out.push(Draw::Turned {
-                    x: cx - t / 2.0,
-                    y: cy + along - ridge_h() / 2.0,
-                    w: t,
-                    h: ridge_h(),
-                    tex,
-                    alpha: RIDGE_FLOOR + (1.0 - RIDGE_FLOOR) * depth,
-                    turn: QUARTER_TURN,
-                });
-            }
-        }
-
-        for slot in -VISIBLE..=VISIBLE {
-            let at = (sub + slot).rem_euclid(N as i32) as usize;
-            let Some(&(tex, fw, fh)) = faces.get(at) else {
-                continue;
-            };
-            let offset = slot as f32 - frac;
-            let (along, depth) = drum(offset * FACET);
-            if depth <= 0.0 {
+            let fade = letter_fade(off);
+            if fade <= 0.0 {
                 continue;
             }
-            let reach = offset.abs().min(1.0);
-            let px = CENTRE_PX + (NEIGHBOUR_PX - CENTRE_PX) * reach;
-            let state = if counts[at] == 0 {
-                EMPTY
-            } else if reach < 0.5 {
-                1.0
-            } else {
-                NEIGHBOUR
-            };
-            let lit = DEPTH_FLOOR + (1.0 - DEPTH_FLOOR) * depth;
-            // A horizontal-axis drum's own foreshortening, which is the vertical one's rule
-            // through ninety degrees: a pane turned away gives up height and keeps its width.
-            let h = px * depth;
-            let w = px * fw as f32 / fh as f32;
+            // The letter keeps its own width at its own height — no turning, so no
+            // foreshortening: a letter 26 tall is as wide as that font draws it 26 tall.
+            let w = h * fw as f32 / fh as f32;
             out.push(Draw::Tex {
-                x: cx - w / 2.0,
-                y: cy + along - h / 2.0,
+                x: cx + off * PITCH - w / 2.0,
+                y: mid - h / 2.0,
                 w,
                 h,
                 tex,
-                alpha: state * lit,
+                alpha: state * fade,
             });
         }
     }
@@ -821,8 +639,8 @@ mod tests {
     #[test]
     fn the_ring_is_the_alphabet_and_the_catch_all() {
         // Twenty-seven: A-Z and `#`, which takes the digits and everything else. The number is
-        // the point of the ring — a hand crosses it in a couple of seconds — so a facet added
-        // back for the digits is a facet that has to be earned.
+        // the point of the ring — a hand crosses it in a couple of seconds — so a slot added
+        // back for the digits is a slot that has to be earned.
         assert_eq!(N, 27);
         assert_eq!(SLOTS[0], '#');
         assert_eq!(SLOTS[N - 1], 'Z');
@@ -960,9 +778,6 @@ mod tests {
         assert!(!l.tick(u64::MAX, &counts));
     }
 
-    /// The id the ridge is given in these tests. The letter faces start at `FACE_ID`, so a test
-    /// can tell a letter from a piece of metal by which side of it the id falls on.
-    const RIDGE_ID: usize = 1;
     const FACE_ID: usize = 100;
 
     /// One face per slot, each with its own id, so a test can tell which slot was drawn.
@@ -972,14 +787,17 @@ mod tests {
             .collect()
     }
 
+    /// The id the ridge is given in these tests. The letter faces start at `FACE_ID`, so a test
+    /// can tell a piece of metal from a letter.
+    const RIDGE_ID: usize = 1;
+
     /// Every `Tex` in the list, as (id, x, w, h, alpha).
-    fn texts(l: &Letters, counts: &[usize; N]) -> Vec<(TexId, f32, f32, f32, f32)> {
+    fn drawn(l: &Letters, counts: &[usize; N]) -> Vec<(TexId, f32, f32, f32, f32)> {
         let mut out = Vec::new();
-        l.draw(
-            None,
+        l.draw_strip(
             &faces(),
+            Some((TexId::from_raw(RIDGE_ID), RIDGE_W, MODULE_H as u32)),
             counts,
-            Some(TexId::from_raw(RIDGE_ID)),
             &mut out,
         );
         out.iter()
@@ -997,25 +815,33 @@ mod tests {
             .collect()
     }
 
-    /// The letters, left to right. The ridges are taken back out by id rather than by never
-    /// having been drawn: a ridge in the place a letter should be is a hole in the drum, and a
-    /// test that switched the ridges off would have nothing to say about it.
+    /// The ridges, left to right. Taken out of the strip by id rather than by never having been
+    /// drawn: a ridge in the place a letter should be is a hole in the strip, and a test that
+    /// switched the metal off would have nothing to say about it.
+    fn ridges_drawn(l: &Letters, counts: &[usize; N]) -> Vec<(TexId, f32, f32, f32, f32)> {
+        drawn(l, counts)
+            .into_iter()
+            .filter(|(t, ..)| *t == TexId::from_raw(RIDGE_ID))
+            .collect()
+    }
+
+    /// The letters, left to right, with the metal between them taken back out.
     fn letters_drawn(l: &Letters, counts: &[usize; N]) -> Vec<(TexId, f32, f32, f32, f32)> {
-        texts(l, counts)
+        drawn(l, counts)
             .into_iter()
             .filter(|(t, ..)| *t != TexId::from_raw(RIDGE_ID))
             .collect()
     }
 
     #[test]
-    fn the_drum_draws_the_slots_either_side_of_the_marker() {
+    fn the_strip_draws_the_slots_either_side_of_the_marker() {
         // In ring order and nothing else: every letter of the ring between the two ends of the
-        // drum's reach is on screen, and missing one would leave a hole in it.
+        // strip is on screen, and missing one would leave a hole in it.
         let counts = counts_with(&['A']);
         let mut l = Letters::new();
         l.snap_to('A');
         let all = faces();
-        let drawn: Vec<TexId> = letters_drawn(&l, &counts)
+        let seen: Vec<TexId> = letters_drawn(&l, &counts)
             .into_iter()
             .map(|(t, ..)| t)
             .collect();
@@ -1023,166 +849,311 @@ mod tests {
         let expected: Vec<TexId> = (-VISIBLE..=VISIBLE)
             .map(|s| all[(a + s).rem_euclid(N as i32) as usize].0)
             .collect();
-        assert_eq!(drawn, expected);
+        assert_eq!(seen, expected);
     }
 
     #[test]
     fn one_ridge_is_drawn_between_every_pair_of_facets() {
-        // `VISIBLE` facets either side of the marker are drawn — nine of them — so there are
-        // ten joins to draw, one past each end. The spacing is widest at the marker and tightens
-        // towards both ends, symmetrically: that bunching is the surface turning away, and a set
-        // of ridges laid out evenly would be a flat row with lines drawn on it.
+        // `VISIBLE` slots either side of the marker are drawn — nine of them — so there are ten
+        // boundaries and ten ridges: one between every pair and one past each end. All ten at
+        // rest, and that is the part worth holding. The outermost ridge stands half a slot past
+        // the outermost letter, and fading the metal on the letters' own curve would bring it to
+        // zero exactly there. It did, in the first cut: the strip ended on a letter at a third
+        // ink with no seam beyond it, which is the one thing the last ridge exists to prevent.
         let counts = counts_with(&['A']);
         let mut l = Letters::new();
         l.snap_to('A');
-        let ridges: Vec<f32> = texts(&l, &counts)
+        let metal: Vec<(f32, f32)> = ridges_drawn(&l, &counts)
             .into_iter()
-            .filter(|(t, ..)| *t == TexId::from_raw(RIDGE_ID))
+            .map(|(_, x, w, _, a)| (x + w / 2.0, a))
+            .collect();
+        assert_eq!(metal.len(), (VISIBLE * 2 + 2) as usize);
+        let gaps: Vec<f32> = metal.windows(2).map(|w| w[1].0 - w[0].0).collect();
+        for g in &gaps {
+            assert!(
+                (g - PITCH).abs() < 0.01,
+                "the ridges are not even: {gaps:?}"
+            );
+        }
+        // And they sit *between* the letters: every ridge is half a pitch from a letter.
+        let centres: Vec<f32> = letters_drawn(&l, &counts)
+            .into_iter()
             .map(|(_, x, w, ..)| x + w / 2.0)
             .collect();
-        assert_eq!(ridges.len(), (VISIBLE * 2 + 2) as usize);
-
-        let gaps: Vec<f32> = ridges.windows(2).map(|w| w[1] - w[0]).collect();
-        let mid = gaps.len() / 2;
-        for i in 0..gaps.len() {
+        for (r, _) in &metal {
+            let nearest = centres
+                .iter()
+                .map(|c| (c - r).abs())
+                .fold(f32::MAX, f32::min);
             assert!(
-                (gaps[i] - gaps[gaps.len() - 1 - i]).abs() < 0.01,
-                "the drum is not symmetric: {gaps:?}"
+                (nearest - PITCH / 2.0).abs() < 0.01,
+                "a ridge is not between two letters: {nearest}"
             );
         }
-        for i in 0..mid {
-            assert!(
-                gaps[i] < gaps[i + 1],
-                "the ridges do not open out towards the marker: {gaps:?}"
-            );
-        }
+        // One ridge outside each outermost letter, with ink in it: the strip carries on past
+        // what it can name. The two ends are the pair this test exists for.
+        let outer_left = centres[0];
+        let outer_right = centres[centres.len() - 1];
         assert!(
-            gaps[gaps.len() - 1] < gaps[0] + 0.01,
-            "the drum does not run on past the last letter: {ridges:?}"
+            metal[0].0 < outer_left - PITCH / 2.0 + 0.01,
+            "no ridge past the first letter: {} against {outer_left}",
+            metal[0].0
+        );
+        assert!(
+            metal[metal.len() - 1].0 > outer_right + PITCH / 2.0 - 0.01,
+            "no ridge past the last letter: {} against {outer_right}",
+            metal[metal.len() - 1].0
+        );
+        for (at, alpha) in &metal {
+            assert!(*alpha > 0.0, "a ridge at {at} was drawn with no ink in it");
+        }
+    }
+
+    /// Every `Tex` the strip draws, with the vertical it was placed at — which is the one field
+    /// the flat tuples above drop, and the one the centring assertions are about.
+    fn strip_texts(l: &Letters, counts: &[usize; N]) -> Vec<(TexId, f32, f32, f32, f32)> {
+        let mut out = Vec::new();
+        l.draw_strip(
+            &faces(),
+            Some((TexId::from_raw(RIDGE_ID), RIDGE_W, MODULE_H as u32)),
+            counts,
+            &mut out,
+        );
+        out.iter()
+            .filter_map(|d| match d {
+                Draw::Tex {
+                    y, h, alpha, tex, ..
+                } => Some((*tex, *y, *h, *alpha, 0.0)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_metal_is_dimmer_than_the_letters_and_taller_than_them() {
+        // The ridge is a highlight behind the letters, never another state of them: a ridge as
+        // bright as an empty slot would be a strip where every seam looked like a letter nobody
+        // can read. And it is the frame the letters are read through, so the marker has to fit
+        // inside it — same centre, less height.
+        let counts = counts_with(&['A', 'B', 'C', 'D']);
+        let mut l = Letters::new();
+        l.snap_to('A');
+        let texts = strip_texts(&l, &counts);
+        let ridge: Vec<_> = texts
+            .iter()
+            .filter(|(t, ..)| *t == TexId::from_raw(RIDGE_ID))
+            .collect();
+        let letters: Vec<_> = texts
+            .iter()
+            .filter(|(t, ..)| *t != TexId::from_raw(RIDGE_ID))
+            .collect();
+
+        assert!(!ridge.is_empty(), "no metal was drawn at all");
+        for (_, y, h, ..) in &ridge {
+            assert!(
+                (h - MODULE_H).abs() < 0.01,
+                "a ridge is not the widget's height: {h} vs {MODULE_H}"
+            );
+            assert!(
+                (y - (MODULE_MID - MODULE_H / 2.0)).abs() < 0.01,
+                "a ridge is not hung on the widget's top edge: {y}"
+            );
+        }
+
+        // The metal's peak is `RIDGE_PEAK` of its colour and the dimmest letter is `EMPTY` of the
+        // ink; which of those is brighter is settled at compile time a few hundred lines up, and
+        // here it is only the placement that is being asked about.
+        let brightest_ridge = ridge
+            .iter()
+            .map(|(_, _, _, _, a)| *a)
+            .fold(0.0f32, f32::max);
+        assert!(
+            brightest_ridge <= 1.0,
+            "a ridge is drawn more solid than its own alpha allows: {brightest_ridge}"
+        );
+
+        // And the marker sits inside the frame: shorter than a ridge, on the same centre.
+        let marker = letters[VISIBLE as usize];
+        assert!(marker.2 < MODULE_H, "the marker stands over the metal");
+        assert!(
+            (marker.1 + marker.2 / 2.0 - MODULE_MID).abs() < 0.01,
+            "the marker is not on the widget's middle"
         );
     }
 
     #[test]
-    fn the_surface_turns_away_toward_the_ends() {
-        // The whole point of the drum: what is not at the marker is narrower, closer to its
-        // neighbour and dimmer, because the pane it is printed on has turned away from the
-        // eye. A row whose letters were all the same width and evenly spaced is the flat strip
-        // the drum was drawn to replace.
+    fn the_widget_is_centred_in_the_band_and_clear_of_its_edges() {
+        // The three things the placement has to do at once: sit on the middle of the band, stay
+        // inside the window it is read through, and leave both the window's frame and the band's
+        // own boundary alone. All three are one number's business — `MODULE_MID` — so they are
+        // checked together, on the tallest thing the strip can draw.
+        //
+        // The band's lower boundary used to carry a lit lip and this test measured against it.
+        // The lip is gone from the band (see `slot_chrome::draw_top_band`: the bay's line under
+        // the window read as a rule under the letters), so what is left to clear is the edge
+        // itself and the window's own frame.
         let counts = counts_with(&['A']);
         let mut l = Letters::new();
         l.snap_to('A');
-        let drawn = letters_drawn(&l, &counts);
-        assert_eq!(drawn.len(), (VISIBLE * 2 + 1) as usize);
+        let texts = strip_texts(&l, &counts);
 
-        let centre = &drawn[VISIBLE as usize];
+        let top = MODULE_MID - MODULE_H / 2.0;
+        let bottom = MODULE_MID + MODULE_H / 2.0;
+        // Centred on the band rather than on the window: the window is not centred in the band,
+        // so centring on it is what used to leave the strip reading as low in the case.
+        assert!(
+            ((top + bottom) / 2.0 - crate::slot_chrome::TOP_BAND_H / 2.0).abs() < 0.01,
+            "the widget is not centred in the band"
+        );
+        // Inside the opening, so no part of it is printed on the plastic around the window.
+        let (win_y, win_bottom) = (
+            crate::slot_chrome::TOP_WIN_Y,
+            crate::slot_chrome::TOP_WIN_Y + crate::slot_chrome::TOP_WIN_H,
+        );
+        assert!(
+            top >= win_y && bottom <= win_bottom,
+            "the widget leaves the window: {top}..{bottom} against {win_y}..{win_bottom}"
+        );
+        // And clear of the band's own lower boundary, which is the only line left down there.
+        let band = crate::slot_chrome::TOP_BAND_H;
+        for (_, y, h, ..) in &texts {
+            assert!(
+                y + h <= band - 6.0,
+                "something is too close to the band's edge: {} vs {band}",
+                y + h
+            );
+        }
+    }
+
+    #[test]
+    fn the_letters_stand_at_even_gaps() {
+        // What the drum could not do: the slots are all at the same depth, so they are all the
+        // same distance apart and the run is a row rather than a surface turning away. An
+        // uneven gap here would mean a leftover of the turning had survived into the strip.
+        let counts = counts_with(&['A']);
+        let mut l = Letters::new();
+        l.snap_to('A');
+        let centres: Vec<f32> = letters_drawn(&l, &counts)
+            .into_iter()
+            .map(|(_, x, w, ..)| x + w / 2.0)
+            .collect();
+        assert_eq!(centres.len(), (VISIBLE * 2 + 1) as usize);
+        let gaps: Vec<f32> = centres.windows(2).map(|w| w[1] - w[0]).collect();
+        for g in &gaps {
+            assert!((g - PITCH).abs() < 0.01, "the gaps are not even: {gaps:?}");
+        }
+    }
+
+    #[test]
+    fn the_marker_is_the_tallest_and_the_brightest() {
+        let counts = counts_with(&['A', 'B', 'C', 'D']);
+        let mut l = Letters::new();
+        l.snap_to('A');
+        let d = letters_drawn(&l, &counts);
+        let centre = &d[VISIBLE as usize];
         assert_eq!(centre.3, CENTRE_PX, "the marker is not at full height");
         assert_eq!(
             centre.2,
             CENTRE_PX * 20.0 / 24.0,
-            "the marker's width is not its own aspect at full depth"
+            "the marker's width is not its own aspect"
         );
-        assert!(centre.4 > drawn[0].4, "the marker is not the brightest");
-        let right = &drawn[VISIBLE as usize + 1..];
-        for w in right.windows(2) {
-            let (nearer, further) = (&w[0], &w[1]);
+        assert!(centre.4 > d[VISIBLE as usize + 1].4, "not the brightest");
+        for pair in d[VISIBLE as usize..].windows(2) {
             assert!(
-                further.2 < nearer.2,
-                "widths do not fall off: {nearer:?} {further:?}"
+                pair[1].3 <= pair[0].3,
+                "the letters grow towards the ends: {d:?}"
             );
-            assert!(
-                further.4 < nearer.4,
-                "ink does not fall off: {nearer:?} {further:?}"
-            );
-        }
-        let gaps: Vec<f32> = right.windows(2).map(|w| w[1].1 - w[0].1).collect();
-        for g in gaps.windows(2) {
-            assert!(g[1] < g[0], "the spacing does not bunch up: {gaps:?}");
         }
     }
 
     #[test]
-    fn the_metal_turns_with_the_letters() {
-        // Half a slot of spring, and everything drawn through the drum's faces has moved left by
-        // the same amount: the ridges, the teeth on them and the letters are one object. A ridge
-        // that stood still while the letters slid past it is a glass tube with lines drawn on.
-        let counts = counts_with(&['A', 'B', 'C', 'D']);
+    fn the_ends_of_the_strip_fade_out() {
+        // The fade runs from three slots out, and the outermost slot the strip draws is four
+        // out, so that letter is at a third of its ink. The letter one in from it is not faded
+        // at all, which is what makes this a fade rather than a general dimming.
+        let counts = counts_with(&['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']);
         let mut l = Letters::new();
-        l.snap_to('A');
-        let before = texts(&l, &counts);
-        let moved = {
-            let mut l = Letters::new();
-            l.snap_to('A');
-            // One frame of the spring towards the next letter, which is a fraction of a slot and
-            // therefore the whole of what this test is about.
-            l.centre_on('B');
+        l.snap_to('E');
+        let d = letters_drawn(&l, &counts);
+        let inner = d[VISIBLE as usize + 1].4;
+        assert!(d[0].4 < inner, "the outermost letter is not faded: {d:?}");
+        assert!(
+            d[d.len() - 1].4 < inner,
+            "the outermost letter is not faded: {d:?}"
+        );
+    }
+
+    #[test]
+    fn the_strip_of_centres_sits_inside_the_window() {
+        // `VISIBLE` slots either side of the marker, 192 px across at four fifths of the old
+        // pitch, and it has to be inside the opening or the outermost letters would read as
+        // printed on the case beside it.
+        let span = (VISIBLE * 2) as f32 * PITCH;
+        assert!(
+            span < crate::slot_chrome::TOP_WIN_W,
+            "the strip is wider than the window: {span}"
+        );
+        // Narrower than one cart, where it used to be exactly as wide as one. That equality was
+        // the reason the pitch was thirty; at four fifths it is gone on purpose, and the bound
+        // below is only here so a later rescale cannot quietly make the strip a sliver.
+        let cart = crate::cart::CART_W as f32;
+        assert!(
+            span < cart,
+            "the strip is not narrower than a cart on the row: {span}"
+        );
+        assert!(span > cart * 0.7, "the strip has become too narrow: {span}");
+    }
+
+    /// The strip's own position, so a test can build the two frames the travel is measured
+    /// between without repeating the spring's first step twice.
+    fn settled_at(letter: char, towards: Option<char>) -> Letters {
+        let mut l = Letters::new();
+        l.snap_to(letter);
+        if let Some(next) = towards {
+            l.centre_on(next);
             l.settle(1.0 / 60.0);
-            texts(&l, &counts)
-        };
-        assert_eq!(before.len(), moved.len());
-        for (a, b) in before.iter().zip(moved.iter()) {
-            assert_eq!(a.0, b.0, "the two runs drew different things");
-            let shift = b.1 - a.1;
-            assert!(
-                shift < -0.5,
-                "{} did not move with the drum: {shift}",
-                if a.0 == TexId::from_raw(1) {
-                    "a ridge"
-                } else {
-                    "a letter"
-                }
-            );
         }
+        l
     }
 
     #[test]
-    fn the_drum_sits_centred_in_the_gap_above_the_cart() {
-        // The drum's middle is halfway between the top of the screen and the top of the cart
-        // under the caret. Not halfway between the HUD plate and the cart: the plate is only up
-        // while a level is being changed, so the band it takes is not one this can be planned
-        // around. And it is the tall cart that matters — the one drawn at `CENTER_SCALE`, the one
-        // it must not look like it is resting on.
-        let counts = counts_with(&['A']);
-        let (cw, chh) = capsule_size();
-        let mut out = Vec::new();
-        Letters::new().draw(
-            Some((TexId::from_raw(9), cw, chh)),
-            &faces(),
-            &counts,
-            None,
-            &mut out,
-        );
-        let Draw::Tex { y, h, .. } = out[0] else {
-            panic!("the capsule was not drawn");
+    fn the_strip_moves_as_one_piece() {
+        // One frame of the spring towards the next letter, and everything the strip draws has
+        // moved left by the same amount: it is one object rather than a row of quads that happen
+        // to travel together. The metal is in the same motion, which is what makes the letters
+        // read as sitting *on* something rather than sliding through it.
+        let counts = counts_with(&['A', 'B', 'C', 'D']);
+        let still = settled_at('A', None);
+        let moving = settled_at('A', Some('B'));
+
+        let shift = {
+            let before = letters_drawn(&still, &counts);
+            let after = letters_drawn(&moving, &counts);
+            assert_eq!(before.len(), after.len());
+            for (a, b) in before.iter().zip(after.iter()) {
+                assert_eq!(a.0, b.0, "the two runs drew different letters");
+                assert!(b.1 < a.1, "a letter did not move with the strip: {a:?}");
+            }
+            before[0].1 - after[0].1
         };
-        // The texture carries `HALO` of shadow all round, so its own middle is the drum's.
-        let middle = y + h / 2.0;
-        let cart_top =
-            crate::shelf::FOOT_Y - crate::cart::CART_H as f32 * crate::shelf::CENTER_SCALE;
-        assert!(
-            (middle - cart_top / 2.0).abs() < 0.01,
-            "the drum is at {middle}, not at the middle of 0..{cart_top}"
-        );
-        assert!(
-            middle + CAPSULE_H / 2.0 < cart_top,
-            "the drum overlaps the cart under the caret"
-        );
-    }
+        assert!(shift > 0.0, "the strip did not move");
 
-    #[test]
-    fn nothing_is_drawn_where_the_drum_has_turned_past_the_housing() {
-        // The drum is drawn half a facet past the outermost letter either way and stops: past
-        // that it is behind the housing's end cap, and anything drawn there is metal floating
-        // over the wallpaper outside the window.
-        let counts = counts_with(&['A']);
-        let mut l = Letters::new();
-        l.snap_to('A');
-        let rim = drum_reach();
-        let cx = crate::draw::OUT_W as f32 / 2.0;
-        for (_, x, w, ..) in texts(&l, &counts) {
-            let mid = x + w / 2.0 - cx;
+        // The metal, drawn pairwise rather than matched by nearest position: all ten ridges are
+        // on screen in both frames, so each of them is a piece the two frames can be asked about
+        // directly.
+        let before = ridges_drawn(&still, &counts);
+        let after = ridges_drawn(&moving, &counts);
+        assert_eq!(
+            before.len(),
+            after.len(),
+            "the number of ridges changed as the strip moved"
+        );
+        for (a, b) in before.iter().zip(after.iter()) {
+            assert_eq!(a.0, b.0, "the metal changed identity as it moved");
             assert!(
-                mid.abs() <= rim + RIDGE_W as f32,
-                "something is past the flat of the housing: {mid}"
+                ((a.1 - shift) - b.1).abs() < 0.01,
+                "a ridge moved by {} while the letters moved by {shift}",
+                a.1 - b.1
             );
         }
     }

@@ -1,7 +1,9 @@
 use slot_gfx::OUT_W;
 
-use crate::hud::{HUD_INK, PLATE_H};
+use crate::hud::PLATE_H;
 use crate::icon::{haloed, HALO_PX};
+use crate::lang;
+use crate::palette;
 use crate::text;
 use crate::CartFace;
 
@@ -19,15 +21,10 @@ pub enum Toast {
     AudioStable,
     AudioBalanced,
     AudioStrict,
-    /// The two ways the shelf indexes the library, said when SELECT+START swaps between them.
-    /// The swap is otherwise invisible until the row moves: for that one press the dial does
-    /// not say anything new, it says the same thing in another place.
-    NavWheel,
-    NavSidebar,
 }
 
 impl Toast {
-    pub const ALL: [Toast; 9] = [
+    pub const ALL: [Toast; 7] = [
         Toast::StateSaved,
         Toast::StateLoaded,
         Toast::CheatsOn,
@@ -35,8 +32,6 @@ impl Toast {
         Toast::AudioStable,
         Toast::AudioBalanced,
         Toast::AudioStrict,
-        Toast::NavWheel,
-        Toast::NavSidebar,
     ];
 
     /// Position in `ALL`, which is the order faces are uploaded in.
@@ -46,15 +41,13 @@ impl Toast {
 
     pub fn text(self) -> &'static str {
         match self {
-            Toast::StateSaved => "存档已保存",
-            Toast::StateLoaded => "存档已读取",
-            Toast::CheatsOn => "金手指已开启",
-            Toast::CheatsOff => "金手指已关闭",
-            Toast::AudioStable => "音频：稳定",
-            Toast::AudioBalanced => "音频：均衡",
-            Toast::AudioStrict => "音频：严格",
-            Toast::NavWheel => "字母导航：轮盘",
-            Toast::NavSidebar => "字母导航：侧栏",
+            Toast::StateSaved => lang::TOAST_STATE_SAVED,
+            Toast::StateLoaded => lang::TOAST_STATE_LOADED,
+            Toast::CheatsOn => lang::TOAST_CHEATS_ON,
+            Toast::CheatsOff => lang::TOAST_CHEATS_OFF,
+            Toast::AudioStable => lang::TOAST_AUDIO_STABLE,
+            Toast::AudioBalanced => lang::TOAST_AUDIO_BALANCED,
+            Toast::AudioStrict => lang::TOAST_AUDIO_STRICT,
         }
     }
 }
@@ -97,5 +90,5 @@ pub fn toast_face(toast: Toast) -> CartFace {
         TOAST_MIN_PX,
     );
     let cov = text::coverage(TOAST_W, TOAST_H, &layout);
-    haloed(&cov, TOAST_W, TOAST_H, HUD_INK)
+    haloed(&cov, TOAST_W, TOAST_H, palette::ink())
 }

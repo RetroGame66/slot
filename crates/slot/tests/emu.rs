@@ -28,7 +28,10 @@ fn drain(sink: StubSink) {
 }
 
 fn spawn_into(mut sink: StubSink, sav: Option<Vec<u8>>) -> EmuHandle {
-    sink.open(32_768).expect("the stub refused to open");
+    // The default profile: what a test wants is a sink that opens, and the latency
+    // profile is the app's business — see `audio::Profile`.
+    sink.open(32_768, slot::audio::Profile::default())
+        .expect("the stub refused to open");
     drain(sink.clone());
     let emu = EmuHandle::spawn(
         Box::new(MockCore::new()),
@@ -36,6 +39,7 @@ fn spawn_into(mut sink: StubSink, sav: Option<Vec<u8>>) -> EmuHandle {
         sink.ring(),
         sav,
         None,
+        slot::audio::Profile::default(),
     );
     // A worker starts paused now, because one spawned during an insert must not run the
     // first frames of the bios boot where nobody can see them. A test that wants a running
@@ -446,9 +450,17 @@ impl RetroCore for SpyLinkCore {
 
 fn spawn_with_core(core: Box<dyn RetroCore>) -> EmuHandle {
     let mut sink = StubSink::new();
-    sink.open(32_768).expect("the stub refused to open");
+    sink.open(32_768, slot::audio::Profile::default())
+        .expect("the stub refused to open");
     drain(sink.clone());
-    let emu = EmuHandle::spawn(core, PathBuf::from("mock"), sink.ring(), None, None);
+    let emu = EmuHandle::spawn(
+        core,
+        PathBuf::from("mock"),
+        sink.ring(),
+        None,
+        None,
+        slot::audio::Profile::default(),
+    );
     emu.set_speed(Speed::Normal);
     assert!(
         wait_for(|| emu.state() != CoreState::Loading),

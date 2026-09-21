@@ -2,11 +2,8 @@
 """Pack deploy/ into a zip whose top level is System/, ready to unzip onto the SD card."""
 import os, zipfile
 
-# Layout: this script sits at the root of the source tree, `deploy/` beside it and the zip one
-# level up, so the whole thing travels with the tree.
-HERE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(HERE, "deploy")
-OUT = os.path.join(os.path.dirname(HERE), "slot-frontend-System.zip")
+SRC = r"F:/WorkBuddyWorkSpace/2026-09-11-08-38-21/slot-main/deploy"
+OUT = r"F:/WorkBuddyWorkSpace/2026-09-11-08-38-21/slot-frontend-System.zip"
 
 entries = []
 for dirpath, _dirnames, filenames in os.walk(SRC):

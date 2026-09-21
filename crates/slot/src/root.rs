@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use crate::app::LetterNav;
 use crate::audio::Profile;
 use crate::input::Remap;
 
@@ -161,26 +160,6 @@ pub fn audio_profile(root: &Path) -> Profile {
 /// profile it booted with.
 pub fn write_audio_profile(root: &Path, profile: Profile) {
     let _ = std::fs::write(root.join("System/audio.txt"), profile.as_str());
-}
-
-/// Which of the shelf's two letter dials is standing, read from `System/letternav.txt`:
-/// `wheel` (laid across the panel above the row, what shipped) or `sidebar` (the same dial on
-/// its end, down the right-hand edge).
-///
-/// Missing, blank or misspelled reads as `wheel` — a card edited on a PC should not be able to
-/// leave the shelf with no dial at all on it, which is what an unrecognised word would mean if
-/// it were an error.
-pub fn letter_nav(root: &Path) -> LetterNav {
-    std::fs::read_to_string(root.join("System/letternav.txt"))
-        .ok()
-        .and_then(|t| LetterNav::parse(&t))
-        .unwrap_or_default()
-}
-
-/// Persist the standing dial. Best effort, as the rest are: a read only card keeps whichever
-/// one it booted with.
-pub fn write_letter_nav(root: &Path, nav: LetterNav) {
-    let _ = std::fs::write(root.join("System/letternav.txt"), nav.as_str());
 }
 
 /// One cheat code for a cart. `code` is the raw code fed to the core verbatim; `desc` is the

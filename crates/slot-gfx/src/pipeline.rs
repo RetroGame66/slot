@@ -58,8 +58,7 @@ impl GamePass {
             u_bright = crate::gl::uniform_location(prog, "u_bright");
             u_cc = crate::gl::uniform_location(prog, "u_cc");
             u_cc_gamma = crate::gl::uniform_location(prog, "u_cc_gamma");
-            // 1.0 multiplies in the encoded space, which is what the picture did before this
-            // uniform existed. The app pushes the real value every frame.
+            // 1.0 = 编码空间直乘（旧行为）。app 每帧推真正的值。
             gl::Uniform1f(u_cc_gamma, 1.0);
             // Identity until a colour correction is chosen; the compositor uploads the real one.
             gl::UniformMatrix3fv(u_cc, 1, gl::FALSE, IDENTITY_CC.as_ptr());
@@ -121,10 +120,8 @@ impl GamePass {
         }
     }
 
-    /// The gamma the colour correction runs in. 1.0 multiplies in the encoded space, which is
-    /// what the picture did before this existed; above it the correction is done in linear,
-    /// where a half-colour stops darkening and a monochrome backlight keeps its body. Pushed
-    /// with the matrix by `Fbo::set_cc_gamma`.
+    /// 色彩校正所用的 gamma。1.0 = 编码空间直乘（旧行为）；>1 = 在线性空间做校正
+    /// （半彩不再发暗、单色背光更浓郁）。与矩阵一起由 `Fbo::set_cc_gamma` 推送。
     pub fn set_cc_gamma(&self, g: f32) {
         unsafe {
             gl::UseProgram(self.prog);

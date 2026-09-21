@@ -484,7 +484,9 @@ fn about_opens_from_the_shelf_and_nowhere_else() {
         s.app().phase()
     );
     s.app_mut().apply(slot_input::Action::OpenAbout);
-    assert!(matches!(s.app().phase(), slot::app::Phase::About));
+    // `About` carries the card's scroll, so the pattern names it and ignores it: what this
+    // asks is which phase is up, not where the list is scrolled to.
+    assert!(matches!(s.app().phase(), slot::app::Phase::About { .. }));
 
     // And a seated cart has no about screen at all.
     s.app_mut()
@@ -492,7 +494,7 @@ fn about_opens_from_the_shelf_and_nowhere_else() {
     s.app_mut().apply(slot_input::Action::Insert);
     s.app_mut().apply(slot_input::Action::OpenAbout);
     assert!(
-        !matches!(s.app().phase(), slot::app::Phase::About),
+        !matches!(s.app().phase(), slot::app::Phase::About { .. }),
         "a label opened over a seated cart"
     );
 }
@@ -508,7 +510,7 @@ fn both_b_and_menu_close_the_about_screen() {
     ] {
         let (mut s, _motor) = common::session_with_platform(d.path());
         s.app_mut().apply(slot_input::Action::OpenAbout);
-        assert!(matches!(s.app().phase(), slot::app::Phase::About));
+        assert!(matches!(s.app().phase(), slot::app::Phase::About { .. }));
         s.app_mut().apply(out);
         assert!(
             matches!(s.app().phase(), slot::app::Phase::Shelf),
@@ -1176,7 +1178,7 @@ fn the_neighbours_dim_to_a_quarter_while_a_cart_is_open() {
     let alpha = out
         .iter()
         .find_map(|d| match *d {
-            Draw::Tex { tex, alpha, .. } if tex == faces[1] => Some(alpha),
+            Draw::Tex { tex, alpha, .. } if Some(tex) == faces[1] => Some(alpha),
             _ => None,
         })
         .expect("the neighbour is not on screen while the cart is open");

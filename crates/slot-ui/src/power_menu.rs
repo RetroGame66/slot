@@ -1,3 +1,4 @@
+use crate::lang;
 use crate::plate::UndoFace;
 use crate::text;
 
@@ -27,8 +28,8 @@ impl PowerChoice {
 
     pub fn text(self) -> &'static str {
         match self {
-            PowerChoice::Restart => "重启",
-            PowerChoice::PowerOff => "关机",
+            PowerChoice::Restart => lang::POWER_RESTART,
+            PowerChoice::PowerOff => lang::POWER_OFF,
         }
     }
 }
@@ -43,7 +44,13 @@ const MENU_H: u32 = 40;
 /// Breathing room either side of the ink, which is also what the highlight bar is padded by
 /// so the bar hugs the words rather than the panel.
 pub const MENU_PAD: u32 = 18;
-const MENU_INK: [u8; 3] = [0xf6, 0xf4, 0xef];
+
+/// The menu type, in the palette's ink — and it has to be, because the ground these rows are
+/// set on is `slot_chrome::opening`, which flips with the mode. A menu whose panel went light
+/// while its type stayed light would be a screen with nothing on it.
+fn menu_ink() -> [u8; 3] {
+    crate::palette::ink()
+}
 
 /// Sized to its own text rather than to a fixed box, so a caller can put a bar behind it
 /// that fits the words. A fixed width would make the bar the same size under "重启" and
@@ -60,7 +67,7 @@ pub fn menu_face(label: &str) -> UndoFace {
     let w = ink + 2 * MENU_PAD;
     let mut rgba = vec![0u8; (w * MENU_H * 4) as usize];
     let layout = text::fit(font, label, w as f32, 1, MENU_PX, MENU_MIN_PX);
-    text::draw_centred(&mut rgba, w, MENU_H, &layout, MENU_INK);
+    text::draw_centred(&mut rgba, w, MENU_H, &layout, menu_ink());
     UndoFace { rgba, w, h: MENU_H }
 }
 
@@ -74,10 +81,14 @@ const CHEAT_MIN_PX: f32 = 11.0;
 const CHEAT_H: u32 = 22;
 const CHEAT_PAD: u32 = 8;
 /// The description and code sizes for the two-line layout; the code sits beneath the description
-/// in a dimmer ink so the label reads first and the code second.
+/// in a dimmer ink so the label reads first and the code second — dimmer meaning *towards the
+/// ground*, which is the palette's business rather than this file's.
 const CHEAT_DESC_PX: f32 = 16.0;
 const CHEAT_CODE_PX: f32 = 11.0;
-const CHEAT_CODE_INK: [u8; 3] = [0x9a, 0x98, 0x92];
+
+fn cheat_code_ink() -> [u8; 3] {
+    crate::palette::dim_ink()
+}
 
 pub fn cheat_row_face(desc: &str, code: &str) -> UndoFace {
     let Some(font) = text::label_font() else {
@@ -108,18 +119,18 @@ pub fn cheat_row_face(desc: &str, code: &str) -> UndoFace {
         let mut rgba = vec![0u8; (w * h * 4) as usize];
         let desc_layout = text::fit(font, desc, w as f32, 1, CHEAT_DESC_PX, CHEAT_DESC_PX * 0.7);
         let mut top = vec![0u8; (w * desc_band * 4) as usize];
-        text::draw_centred(&mut top, w, desc_band, &desc_layout, MENU_INK);
+        text::draw_centred(&mut top, w, desc_band, &desc_layout, menu_ink());
         blit_band(&mut rgba, w, &top, 0);
         let code_layout = text::fit(font, code, w as f32, 1, CHEAT_CODE_PX, CHEAT_CODE_PX * 0.7);
         let mut bot = vec![0u8; (w * code_band * 4) as usize];
-        text::draw_centred(&mut bot, w, code_band, &code_layout, CHEAT_CODE_INK);
+        text::draw_centred(&mut bot, w, code_band, &code_layout, cheat_code_ink());
         blit_band(&mut rgba, w, &bot, desc_band);
         UndoFace { rgba, w, h }
     } else {
         // No description: the code alone, exactly as the old single-line row did.
         let mut rgba = vec![0u8; (w * CHEAT_H * 4) as usize];
         let layout = text::fit(font, code, w as f32, 1, CHEAT_PX, CHEAT_MIN_PX);
-        text::draw_centred(&mut rgba, w, CHEAT_H, &layout, MENU_INK);
+        text::draw_centred(&mut rgba, w, CHEAT_H, &layout, menu_ink());
         UndoFace {
             rgba,
             w,

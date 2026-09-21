@@ -6,6 +6,7 @@ use slot_store::Theme;
 
 use crate::cart::{label_colour, label_text, CART_H, CART_W};
 use crate::icon::icon_box;
+use crate::palette;
 use crate::shelf::CENTER_SCALE;
 
 /// Big enough to read as a symbol on a 240 px cart rather than as a mark on its label.
@@ -74,24 +75,37 @@ fn rgb(c: [u8; 3]) -> [f32; 4] {
     ]
 }
 
+/// One surface of the case, in whichever palette the device is in.
+///
+/// The card's `theme.txt` is read once into `THEME` and is the *dark* case; the light case is
+/// the built-in one. Every accessor below goes through here, so there is exactly one place
+/// that knows a mode exists and no way for one band of the case to be left behind when it
+/// changes — which is the failure a per-band `if` would produce eventually.
+fn surface(pick: fn(&Theme) -> [u8; 3]) -> [f32; 4] {
+    match palette::mode() {
+        palette::Mode::Dark => rgb(pick(theme())),
+        palette::Mode::Light => rgb(pick(&palette::LIGHT_CASE)),
+    }
+}
+
 /// The case. Every band has to clear its neighbour, which `slot-ui/tests/contrast.rs` holds
-/// for the default palette. A theme is the card's own business past that.
+/// for both palettes. A theme is the card's own business past that.
 pub fn housing() -> [f32; 4] {
-    rgb(theme().housing)
+    surface(|t| t.housing)
 }
 
 pub fn opening() -> [f32; 4] {
-    rgb(theme().opening)
+    surface(|t| t.opening)
 }
 
 pub fn edge() -> [f32; 4] {
-    rgb(theme().edge)
+    surface(|t| t.edge)
 }
 
 /// The floor of the bay: a step down from the shell, not a second opening. Subtle on purpose,
 /// since it is a moulding line rather than something to read.
 pub fn recess() -> [f32; 4] {
-    rgb(theme().recess)
+    surface(|t| t.recess)
 }
 
 const LIP_Y: f32 = BAND_Y;
@@ -317,6 +331,127 @@ fn for_each_scoop_span(mut span: impl FnMut(f32, f32, f32)) {
         }
         span(CX + start, x - start, d);
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// The top band: the same bay the other way up, with the letter strip in its window
+// ---------------------------------------------------------------------------------------
+
+/// The band the letter strip lives in, at the top of the screen. The same depth as the cart
+/// bay, and the same width down to the pixel: what frames the letters is the machine's own
+/// opening rather than a second piece of furniture invented for them, which is the whole of
+/// why the strip reads as part of the device.
+pub const TOP_BAND_H: f32 = MOUTH_H;
+
+/// The window the letters show through: the bay's opening, mirrored. Its width is the
+/// opening's and it stands on the same centre, so the strip above and the row below cannot
+/// disagree about where the middle of the screen is.
+pub const TOP_WIN_X: f32 = MOUTH_X;
+pub const TOP_WIN_W: f32 = MOUTH_W;
+pub const TOP_WIN_Y: f32 = 12.0;
+pub const TOP_WIN_H: f32 = 36.0;
+
+/// The well around it — the bay's recess, read the other way up — and so the depth the band
+/// has over once the window has taken its share.
+///
+/// The well is not `RECESS_H`: the bay's opening is as deep as a thumb, because a hand has to
+/// reach a cart's face through it, and this one is as deep as a line of letters. The window
+/// sits in the well the way the opening sits in the recess, four pixels in from it.
+const TOP_WELL_Y: f32 = 8.0;
+const TOP_WELL_H: f32 = 44.0;
+
+/// How far the light off a band reaches into the screen, how finely the falloff is cut, and how
+/// bright it is where it starts.
+///
+/// The draw list is filled quads and nothing else — no gradient, no blur — so a glow is a stack
+/// of one-pixel bands whose alpha steps down. Ten is fine enough that the steps do not read as
+/// bands, which is the only thing that would give the trick away.
+///
+/// Faint on purpose, and it is worth saying why: this is the sheen of light spilling off a lit
+/// edge onto the picture behind it, not a second edge. At any real strength it stops reading as
+/// light and starts reading as a border someone drew on.
+const GLOW_H: f32 = 10.0;
+const GLOW_STEPS: usize = 10;
+const GLOW_PEAK: f32 = 0.16;
+
+/// The light that spills off one edge of the case onto the screen behind it.
+///
+/// `edge_y` is the boundary itself and `down` is which way the screen is from it: the band at
+/// the top of the case throws its light downward, the bay at the bottom throws its upward, and
+/// both are the same falloff read in opposite directions.
+///
+/// The falloff is squared rather than straight, because a linear ramp reads as a deliberate
+/// gradient while a squared one reads as light: bright where it leaves the plastic, and gone
+/// before the eye has followed it anywhere.
+fn glow(out: &mut Vec<Draw>, edge_y: f32, down: bool) {
+    let step = GLOW_H / GLOW_STEPS as f32;
+    for i in 0..GLOW_STEPS {
+        // One at the edge, zero at the end of the reach, and dimmer than that in between.
+        let t = 1.0 - (i as f32 + 0.5) / GLOW_STEPS as f32;
+        let alpha = GLOW_PEAK * t * t;
+        if alpha <= 0.0 {
+            continue;
+        }
+        // Stepped away from the edge, never onto it: the band's own lit edge is drawn already
+        // and a glow across it would only wash it out.
+        let y = if down {
+            edge_y + i as f32 * step
+        } else {
+            edge_y - (i as f32 + 1.0) * step
+        };
+        out.push(band(0.0, y, OUT_W as f32, step, edge(), alpha));
+    }
+}
+
+/// The light off both bands of the case: down from the top of the screen, up from the bay at
+/// the bottom.
+///
+/// Both, and in one call, because they are one thing seen twice — the case is the same object
+/// top and bottom, and the two boundaries are where it meets the picture. Drawn as the last
+/// piece of the case's own furniture so a cart on its way into the slot is lit by it rather
+/// than drawing over it.
+pub fn draw_edge_glow(out: &mut Vec<Draw>) {
+    glow(out, TOP_BAND_H, true);
+    glow(out, BAND_Y, false);
+}
+
+/// The band at the top of the screen, drawn from the bay's numbers rather than from a second
+/// set worked out for it.
+///
+/// Laid out as the bay is, read from the bottom up: the housing, the well stepped into it, the
+/// opening inside that, and the lit edge of the cut at the top of the window — `RIM_W`.
+///
+/// **No lip, and that is a change from the bay rather than an omission.** The bay's own lower
+/// boundary carries a lit edge — `LIP_H`, the line a cart is cut off at as it goes in — and the
+/// band was first drawn with the same line under its window, on the argument that it was the
+/// same moulding seen the other way up. It is not: the band is a lid, nothing passes through it,
+/// and a second line two pixels above the band's edge read as a rule drawn under the letters
+/// rather than as an edge of the case. The bay keeps its lip because a cart really is cut off
+/// there.
+///
+/// One difference, and it is the reason this is a band and not a slot: nothing goes through
+/// it. There is no depth behind the window and no shadow in it, because the letters are printed
+/// on the inside of the opening and the band is a lid, so the whole of it is drawn flat.
+pub fn draw_top_band(out: &mut Vec<Draw>) {
+    out.push(band(0.0, 0.0, OUT_W as f32, TOP_BAND_H, housing(), 1.0));
+    out.push(band(BAY_X, TOP_WELL_Y, BAY_W, TOP_WELL_H, recess(), 1.0));
+    out.push(band(
+        TOP_WIN_X,
+        TOP_WIN_Y,
+        TOP_WIN_W,
+        TOP_WIN_H,
+        opening(),
+        1.0,
+    ));
+    // The lit edge last, so nothing is painted over the highlight — the order the bay uses.
+    out.push(band(
+        TOP_WIN_X,
+        TOP_WIN_Y - RIM_W,
+        TOP_WIN_W,
+        RIM_W,
+        edge(),
+        1.0,
+    ));
 }
 
 /// The slot with nothing going into it. The shelf shows it so the cart you pick has a
