@@ -134,7 +134,7 @@ impl Row {
 /// until it measured inside it, which is why several read terser than the Chinese they answer.
 /// Whoever edits either table should measure again — the widest line here is 337 of 340.
 #[cfg(not(feature = "lang-en"))]
-pub const ROWS: [Row; 20] = [
+pub const ROWS: [Row; 22] = [
     Row::Head("货架界面"),
     Row::Key(
         &[
@@ -151,6 +151,8 @@ pub const ROWS: [Row; 20] = [
     ),
     Row::Key(&[Seg::Sep("轻点"), Seg::Btn("A")], "从最近的即时存档继续"),
     Row::Key(&[Seg::Sep("长按"), Seg::Btn("A")], "把这个游戏从头开始"),
+    Row::Key(&[Seg::Sep("轻点"), Seg::Btn("B")], "收藏 / 取消收藏这张卡"),
+    Row::Key(&[Seg::Sep("长按"), Seg::Btn("B")], "收藏夹 / 全部"),
     Row::Key(&[Seg::Btn("START")], "为这张卡挑一个模拟器"),
     Row::Key(&[Seg::Btn("MENU")], "关于页与快捷键说明"),
     Row::Key(
@@ -239,7 +241,7 @@ pub const ROWS: [Row; 20] = [
 /// is what it is: the order, the key lines and the counts are identical, and only the words move.
 /// Measured against the column budget above, not eyeballed — see the note on the Chinese table.
 #[cfg(feature = "lang-en")]
-pub const ROWS: [Row; 20] = [
+pub const ROWS: [Row; 22] = [
     Row::Head("On the shelf"),
     Row::Key(&[Seg::Btn("D-PAD"), Seg::Sep("L/R")], "Browse carts"),
     // `L1`/`R1` rather than the Chinese card's `L / R`: the two names would collide with the
@@ -250,6 +252,8 @@ pub const ROWS: [Row; 20] = [
     ),
     Row::Key(&[Seg::Sep("Tap"), Seg::Btn("A")], "Resume last save"),
     Row::Key(&[Seg::Sep("Hold"), Seg::Btn("A")], "Restart the game"),
+    Row::Key(&[Seg::Sep("Tap"), Seg::Btn("B")], "Star this cart"),
+    Row::Key(&[Seg::Sep("Hold"), Seg::Btn("B")], "Favourites / all"),
     Row::Key(&[Seg::Btn("START")], "Pick the core"),
     Row::Key(&[Seg::Btn("MENU")], "About & shortcuts"),
     Row::Key(
