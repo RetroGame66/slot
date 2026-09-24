@@ -430,6 +430,7 @@ threshold, so the press is remembered and the release decides, exactly as A's is
 | `slot-ui/src/icon.rs` | `Icon::Star` (`\uf005`) and `Icon::StarOutline` (`\uf006`), appended to `ALL` so existing indices are untouched. |
 | `slot/src/app.rs` | `fav_held`/`fav_hold()` beside `play_held`/`play_hold()`; `toggle_favorite()`, `toggle_fav_view()`, `show_all()`, `show_favorites()`, `retally_letters()`; the star and the indicator. |
 | `slot/src/frontend.rs` | Three textures uploaded at boot — the star, and the indicator unlit and lit — because the star is the one glyph on the shelf drawn in a colour of its own rather than the case's ink. |
+| `slot-ui/src/shortcuts.rs` | Two rows on the about card's shelf section, in both tables: `轻点 B` / `长按 B` and their English pair. The card is the frontend's own list of its keys, so a key that is not on it is a key the user has to be told about somewhere else. |
 
 Three decisions worth naming:
 
