@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::atomic::atomic_write;
@@ -77,6 +78,12 @@ pub struct SlotState {
     pub utc_offset_min: i16,
     /// Light or dark. The one field whose absence is not an error — see `parse`.
     pub mode: Mode,
+    /// The carts the user has starred, as filename stems. A `BTreeSet` rather than a `Vec`
+    /// because it is a membership question asked once per cart per frame on the shelf, and
+    /// because the order is never read: the shelf is ordered by the library, not by when a
+    /// star was given. Written one `favorites=` line per stem, so a stem carrying `=`, a space
+    /// or a comma survives the round trip (see `parse`).
+    pub favorites: BTreeSet<String>,
 }
 
 /// Not derived. `read_slot_state` falls back here on a first boot, and all zeroes would
@@ -95,6 +102,7 @@ impl Default for SlotState {
             clock_set: false,
             utc_offset_min: 0,
             mode: Mode::Dark,
+            favorites: BTreeSet::new(),
         }
     }
 }
@@ -112,7 +120,7 @@ pub fn read_slot_state(root: &Path) -> SlotState {
 }
 
 pub fn write_slot_state(root: &Path, s: &SlotState) -> std::io::Result<()> {
-    let text = format!(
+    let mut text = format!(
         "cart={}\nbrightness={}\nblue_light={}\nvolume={}\nmuted={}\nclock_set={}\nutc_offset_min={}\nmode={}\n",
         s.cart.as_deref().unwrap_or(""),
         s.brightness,
@@ -123,6 +131,16 @@ pub fn write_slot_state(root: &Path, s: &SlotState) -> std::io::Result<()> {
         s.utc_offset_min,
         s.mode.word()
     );
+    // One line per favourite rather than a delimited list, so a stem that happens to contain
+    // the delimiter is not two carts in disguise: `split_once('=')` on the way back splits at
+    // the first `=` only, so everything after it — `=`, space, comma and all — is the stem.
+    for stem in &s.favorites {
+        if !stem.is_empty() {
+            text.push_str("favorites=");
+            text.push_str(stem);
+            text.push('\n');
+        }
+    }
     atomic_write(&state_path(root), text.as_bytes())
 }
 
@@ -137,6 +155,13 @@ pub fn write_slot_state(root: &Path, s: &SlotState) -> std::io::Result<()> {
 /// exactly one sensible reading: dark, which is what the device did before it could be
 /// anything else. Every *other* key is still all-or-nothing, including one this build has
 /// never heard of.
+///
+/// `favorites` is the second exception, for the same reason and one more: a card that has
+/// never been starred carries no `favorites` line at all, and reading that as corruption
+/// would throw the file away the first time this build booted on it. A key that repeats is
+/// not a duplicate either — one `favorites=` line per stem is the format — so this arm adds
+/// to a set rather than assigning, which is the one place a later line does not replace an
+/// earlier one.
 fn parse(text: &str) -> Option<SlotState> {
     let mut cart = None;
     let mut brightness = None;
@@ -146,6 +171,7 @@ fn parse(text: &str) -> Option<SlotState> {
     let mut clock_set = None;
     let mut utc_offset_min = None;
     let mut mode = None;
+    let mut favorites = BTreeSet::new();
     for line in text.lines().filter(|l| !l.is_empty()) {
         let (key, value) = line.split_once('=')?;
         match key {
@@ -160,6 +186,11 @@ fn parse(text: &str) -> Option<SlotState> {
             // here means someone has been editing the file, and the defaults are the safe
             // answer for the rest of it too.
             "mode" => mode = Some(Mode::from_word(value)?),
+            "favorites" => {
+                if !value.is_empty() {
+                    favorites.insert(value.to_string());
+                }
+            }
             _ => return None,
         }
     }
@@ -173,6 +204,7 @@ fn parse(text: &str) -> Option<SlotState> {
         clock_set: clock_set?,
         utc_offset_min: utc_offset_min?,
         mode: mode.unwrap_or_default(),
+        favorites,
     })
 }
 

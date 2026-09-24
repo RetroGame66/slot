@@ -540,6 +540,10 @@ pub(crate) struct CheatItem {
     pub(crate) enabled: bool,
 }
 
+/// Inset of the shelf's star indicator from the corner of the case. Clear of the cart bay,
+/// which owns the true bottom edge of the screen.
+const FAV_IND_MARGIN: f32 = 10.0;
+
 pub struct App {
     phase: Phase,
     shelf: Shelf,
@@ -564,6 +568,18 @@ pub struct App {
     /// rather than in the gesture layer because A is the GBA's A button everywhere else, and
     /// `Gestures` is deliberately blind to which screen is up.
     play_held: Option<Millis>,
+    /// When B went down on the shelf, and `None` the rest of the time — the same shape as
+    /// `play_held`, and for the same reason. B carries two shelf gestures, a short press that
+    /// stars the cart and a hold that swaps the shelf, and which one a press is cannot be known
+    /// until it either comes up or passes `PLAY_HOLD_MS`.
+    fav_held: Option<Millis>,
+    /// The yellow star a favourite wears, with the size it was rasterised at. Its own upload
+    /// rather than one of the HUD's, because it is the one glyph on the shelf that is a colour
+    /// of its own instead of the case's ink.
+    fav_star: Option<(TexId, u32, u32)>,
+    /// The shelf's indicator, unlit and lit: the same star hollow while the ordinary shelf is
+    /// up and solid while the favourites are.
+    fav_ind: Option<((TexId, u32, u32), (TexId, u32, u32))>,
     /// The last refused action, and the only thing that tells an eject apart from a cart
     /// that would not seat: both leave down the same path.
     refusal: Option<Refusal>,
@@ -774,6 +790,9 @@ impl App {
             letter_faces: Vec::new(),
             letter_ridge_face: None,
             play_held: None,
+            fav_held: None,
+            fav_star: None,
+            fav_ind: None,
             refusal: None,
             refused_from: None,
             alert_face: None,
@@ -989,7 +1008,7 @@ impl App {
         // The strip starts on the letter of whatever the row is showing. Snapped rather than
         // travelled to: there is no previous position at a boot, and a strip arriving from `#`
         // would be the shelf's first movement being one nobody made.
-        if let Some(cart) = self.shelf.carts.get(self.shelf.index) {
+        if let Some(cart) = self.shelf.current_cart() {
             self.letters.snap_to(cart.initial);
         }
     }
@@ -1110,7 +1129,7 @@ impl App {
     /// Which cart the caret is on. Read by the boot path to decide which faces are worth
     /// rasterising before the first frame, and by the background filler to order the rest.
     pub fn shelf_index(&self) -> usize {
-        self.shelf.index
+        self.shelf.current().unwrap_or(0)
     }
 
     /// Exactly one cart on the card. The shelf is unreachable and eject is refused.
@@ -1163,6 +1182,13 @@ impl App {
     /// `by` is the direction of the step: +1 for right (the next letter), -1 for left (the
     /// previous one).
     fn step_letters(&mut self, by: i32, now: Millis) {
+        // The dial counts the library and the favourites shelf is narrower than it, so a
+        // letter jump could seat the caret on a cart this view does not hold. Letter nav is
+        // the library's own control and stands down while a view is filtered; the arrows
+        // still walk the row.
+        if self.shelf.filtered() {
+            return;
+        }
         let counts = self.letter_counts;
         if !self.letters.hold(by, now, &counts) {
             return;
@@ -1172,6 +1198,9 @@ impl App {
 
     /// The same move, without a press behind it: the repeat of a held key.
     fn repeat_letters(&mut self, now: Millis) {
+        if self.shelf.filtered() {
+            return;
+        }
         let counts = self.letter_counts;
         if self.letters.tick(now, &counts) {
             self.seat_on_letter();
@@ -1184,6 +1213,9 @@ impl App {
     /// the glide runs to the nearest image of the chosen cart — so the strip and the row agree
     /// about which way is "onward" without this having to say so.
     fn seat_on_letter(&mut self) {
+        if self.shelf.filtered() {
+            return;
+        }
         let slot = self.letters.target();
         let Some(i) = self
             .shelf
@@ -1404,10 +1436,7 @@ impl App {
 
     /// The cart under the highlight, and `None` on an empty shelf.
     pub fn selected_stem(&self) -> Option<&str> {
-        self.shelf
-            .carts
-            .get(self.shelf.index)
-            .map(|c| c.stem.as_str())
+        self.shelf.current_cart().map(|c| c.stem.as_str())
     }
 
     /// The cached reading. `None` until the first slow tick, and on any device with no gauge.
@@ -1557,6 +1586,16 @@ impl App {
                 Action::GbaUp(Btn::A) => {
                     if self.play_held.take().is_some() {
                         self.insert(false);
+                    }
+                }
+                // B, the screen's other two-gesture button, on the same mechanism as A's: the
+                // press is remembered, the release decides which gesture it was, and the hold
+                // has already spent the press if it got to the threshold first. A short press
+                // stars the cart; a hold swaps the shelf it is shown on.
+                Action::GbaDown(Btn::B) => self.fav_held = Some(now),
+                Action::GbaUp(Btn::B) => {
+                    if self.fav_held.take().is_some() {
+                        self.toggle_favorite();
                     }
                 }
                 Action::Insert => self.insert(false),
@@ -1859,7 +1898,7 @@ impl App {
         // telling it to.
         if self.on_shelf() {
             self.repeat_letters(now);
-            if let Some(cart) = self.shelf.carts.get(self.shelf.index) {
+            if let Some(cart) = self.shelf.current_cart() {
                 self.letters.centre_on(cart.initial);
             }
             self.letters.settle(dt);
@@ -1928,6 +1967,7 @@ impl App {
     /// ask for; it is only the clock that decides which of the two things it was.
     fn timers(&mut self) {
         self.play_hold();
+        self.fav_hold();
         // The grace period can run out with the switcher open, so the hint answers to the
         // clock rather than to whatever was on offer on the way in.
         let offer = self.undo_label();
@@ -2136,6 +2176,10 @@ impl App {
                     }
                     _ => {
                         self.shelf.draw(self.shelf_shake(), out);
+                        // The stars, over the row and under the case's own furniture: a starred
+                        // cart wears one above it, and the shelf's own star sits in the corner
+                        // saying which shelf is up.
+                        self.draw_fav_stars(out);
                         // The band at the top of the case, and the index printed along it. The
                         // band is the machine's — the cart bay's mirror, drawn from the bay's
                         // own numbers — so it goes down as furniture and the letters go over
@@ -2149,12 +2193,18 @@ impl App {
                         // by it rather than drawn over it.
                         draw_edge_glow(out);
                         band_on = true;
-                        self.letters.draw_strip(
-                            &self.letter_faces,
-                            self.letter_ridge_face,
-                            &self.letter_counts,
-                            out,
-                        );
+                        // The letter strip is the library's index, and the favourites shelf is
+                        // not the library: the dial has stood down, so the band is left with an
+                        // empty window rather than an index that no longer means anything.
+                        if !self.shelf.filtered() {
+                            self.letters.draw_strip(
+                                &self.letter_faces,
+                                self.letter_ridge_face,
+                                &self.letter_counts,
+                                out,
+                            );
+                        }
+                        self.draw_fav_indicator(out);
                     }
                 }
                 // After the row and before the case: it names what the row is showing, so it
@@ -2653,12 +2703,7 @@ impl App {
         if !self.on_shelf() {
             return;
         }
-        let Some(cart) = self
-            .shelf
-            .carts
-            .get(self.shelf.index)
-            .map(|c| c.stem.clone())
-        else {
+        let Some(cart) = self.shelf.current_cart().map(|c| c.stem.clone()) else {
             return;
         };
         self.play_held = None;
@@ -2693,6 +2738,165 @@ impl App {
         if self.now().saturating_sub(at) >= PLAY_HOLD_MS {
             self.insert(true);
         }
+    }
+
+    /// The other hold on this screen. Spent rather than left for the release, because the
+    /// shelf stays up afterwards and a hold that kept firing every timer tick would swap the
+    /// view over and over for as long as the button was down.
+    fn fav_hold(&mut self) {
+        let Some(at) = self.fav_held else {
+            return;
+        };
+        if !self.on_shelf() {
+            self.fav_held = None;
+            return;
+        }
+        if self.now().saturating_sub(at) >= PLAY_HOLD_MS {
+            self.fav_held = None;
+            self.toggle_fav_view();
+        }
+    }
+
+    /// A short B on the shelf: star the cart under the caret, or take the star back.
+    /// The star is the whole of the feedback — it appears on the cart, which is where the
+    /// user is already looking.
+    fn toggle_favorite(&mut self) {
+        let Some(stem) = self.shelf.current_cart().map(|c| c.stem.clone()) else {
+            return;
+        };
+        if !self.state.favorites.remove(&stem) {
+            self.state.favorites.insert(stem);
+        }
+        self.persist();
+        // The favourites shelf shows the starred carts and nothing else, so a cart that just
+        // lost its star has to leave the view it is standing in.
+        if self.shelf.filtered() {
+            self.show_favorites();
+        }
+    }
+
+    /// A hold of B: swap between the whole library and the starred carts.
+    fn toggle_fav_view(&mut self) {
+        if self.shelf.filtered() {
+            self.show_all();
+        } else {
+            self.show_favorites();
+        }
+    }
+
+    fn show_all(&mut self) {
+        let keep = self.shelf.current_cart().map(|c| c.stem.clone());
+        let view = (0..self.shelf.carts.len()).collect();
+        self.shelf.set_view(view, keep.as_deref());
+        self.retally_letters();
+    }
+
+    /// The starred carts, in library order so a cart sits on the same shelf, at the same
+    /// place among its neighbours, as the one it came from. Refused rather than shown empty
+    /// when nothing is starred: an empty shelf is a screen with nothing on it and no way to
+    /// tell why.
+    fn show_favorites(&mut self) {
+        let keep = self.shelf.current_cart().map(|c| c.stem.clone());
+        let view: Vec<usize> = self
+            .shelf
+            .carts
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| self.state.favorites.contains(&c.stem))
+            .map(|(i, _)| i)
+            .collect();
+        if view.is_empty() {
+            return self.refuse();
+        }
+        self.shelf.set_view(view, keep.as_deref());
+        self.retally_letters();
+    }
+
+    /// The letter dial counts carts, so a view that is not the whole library has its own
+    /// tally. Rebuilt on the edge rather than per frame: the card cannot change while slot is
+    /// running, so the only thing that can move it is a view swap.
+    fn retally_letters(&mut self) {
+        let visible: Vec<Cart> = self.shelf.visible().into_iter().cloned().collect();
+        self.letter_counts = tally_letters(&visible);
+    }
+
+    /// The star over every starred cart in the row.
+    ///
+    /// **Inside the cart**, in the moulded band the shell leaves between its curved top edge and
+    /// the top of the label — `cart::label_panel` puts the label at 22.8% of the face, so that
+    /// band is the top fifth of the shell. Directly above the sticker and still on the cartridge,
+    /// under the arc, rather than floating over the row: the star is printed on the plastic, not
+    /// pinned above the object. Scaled with the cart, so the enlarged selection wears a larger
+    /// star and the row still reads as one row.
+    fn draw_fav_stars(&self, out: &mut Vec<Draw>) {
+        /// Where the label starts, as a fraction of the cart's height: `label_panel`'s 22.8%.
+        const GRIP: f32 = 0.228;
+        let Some((tex, w, h)) = self.fav_star else {
+            return;
+        };
+        if self.state.favorites.is_empty() {
+            return;
+        }
+        let (w, h) = (w as f32, h as f32);
+        for r in self.shelf.slot_rects(None, self.shelf_shake(), 0.0) {
+            if !self
+                .state
+                .favorites
+                .contains(&self.shelf.carts[r.cart].stem)
+            {
+                continue;
+            }
+            let sh = r.h * GRIP * 0.60;
+            let sw = w * (sh / h);
+            let x = r.x + (r.w - sw) / 2.0;
+            let y = r.y + (r.h * GRIP - sh) / 2.0;
+            // A bloom under it: the same star, larger and faint, so it reads as light coming
+            // off the glyph rather than as a second outline. One extra quad, and the linear
+            // tap on an upscaled alpha map is the blur — no pass and no blur shader.
+            let g = sh * 0.45;
+            out.push(Draw::Tex {
+                x: x - g / 2.0,
+                y: y - g / 2.0,
+                w: sw + g,
+                h: sh + g,
+                tex,
+                alpha: r.alpha * 0.30,
+            });
+            out.push(Draw::Tex {
+                x,
+                y,
+                w: sw,
+                h: sh,
+                tex,
+                alpha: r.alpha,
+            });
+        }
+    }
+
+    /// Which shelf is up, in the bottom right corner of the screen — where the original printed
+    /// the time: hollow while the ordinary shelf is showing, solid and yellow while the
+    /// favourites are. A reading rather than a control — the hold of B is the control — so it
+    /// never looks like something to press.
+    fn draw_fav_indicator(&self, out: &mut Vec<Draw>) {
+        let lit = self.shelf.filtered();
+        let Some((tex, w, h)) = (if lit {
+            self.fav_ind.map(|p| p.1)
+        } else {
+            self.fav_ind.map(|p| p.0)
+        }) else {
+            return;
+        };
+        let (w, h) = (w as f32, h as f32);
+        let x = OUT_W as f32 - w - FAV_IND_MARGIN;
+        let y = OUT_H as f32 - h - FAV_IND_MARGIN;
+        out.push(Draw::Tex {
+            x,
+            y,
+            w,
+            h,
+            tex,
+            alpha: 1.0,
+        });
     }
 
     fn eject(&mut self) {
@@ -3137,7 +3341,7 @@ impl App {
         };
         // Nothing to configure with no cart under the highlight, and a picker that wrote to
         // an empty stem would leave a line for a cart that is not there.
-        let Some(cart) = self.shelf.carts.get(self.shelf.index) else {
+        let Some(cart) = self.shelf.current_cart() else {
             return;
         };
         let seat = slot_store::core_for(&root, &cart.stem);
@@ -3152,6 +3356,7 @@ impl App {
         // the lid, and a held A would still insert the cart once its 500 ms ran out.
         self.shelf.release_hold();
         self.play_held = None;
+        self.fav_held = None;
     }
 
     /// Whether the board and lid on the GPU are the highlighted cart's, so its open can start.
@@ -3369,8 +3574,7 @@ impl App {
     /// app is told — `self.core` is the seated cart's, set when a core is actually spawned,
     /// and the shelf has none seated.
     fn write_core(&self, core: Core) {
-        let (Some(root), Some(cart)) = (self.root.clone(), self.shelf.carts.get(self.shelf.index))
-        else {
+        let (Some(root), Some(cart)) = (self.root.clone(), self.shelf.current_cart()) else {
             return;
         };
         if let Err(e) = slot_store::write_selected_core(&root, &cart.stem, core) {
@@ -3692,6 +3896,18 @@ impl App {
         if let Some(p) = &mut self.polaroids {
             p.set_hint_faces(faces);
         }
+    }
+
+    /// The star a favourite wears, the indicator unlit, and the indicator lit, each with the
+    /// size it was rasterised at. Uploaded at boot: none of them ever changes.
+    pub fn set_fav_faces(
+        &mut self,
+        star: (TexId, u32, u32),
+        ind_off: (TexId, u32, u32),
+        ind_on: (TexId, u32, u32),
+    ) {
+        self.fav_star = Some(star);
+        self.fav_ind = Some((ind_off, ind_on));
     }
 
     /// The HUD glyphs, in `Icon::ALL` order. Uploaded once: they never change.

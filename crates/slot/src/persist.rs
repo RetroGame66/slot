@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use slot_store::{atomic_write, read_slot_state, write_slot_state, Core, StateRing};
+use slot_store::{
+    atomic_write, describe, is_rzip, read_slot_state, save_plan, write_slot_state, Core, SavePlan,
+    StateRing,
+};
 
 /// What a save, a load or a flush needs from the emulator. The core runs on a worker thread
 /// and nothing above this trait knows that.
@@ -82,14 +85,26 @@ pub fn eject(
 /// The core hands back the whole save ram whether or not the game touched it, so an
 /// unchanged one is a rewrite of up to 128 KB of card for nothing.
 ///
-/// Also refuses to shrink an existing save. `load_save_ram` can accept bytes it should have
-/// refused: a libretro core that exposes a save-ram region copies `len.min(data.len())` bytes
-/// into it and returns `Ok` regardless, so a cart whose two cores disagree on
-/// `RETRO_MEMORY_SAVE_RAM`'s size truncates silently rather than failing loudly — the class of
-/// bug `resume_trusted`/`save_ram_trusted` cannot see, because as far as the core is concerned
-/// it accepted what it was given. This is the backstop for that: whatever produced a shorter
-/// save than what is already on the card, refuse it and say so, rather than trust that a
-/// smaller battery save is ever a real one.
+/// What may be written is decided by `slot_store::sav::save_plan`, which is where the two ways
+/// a GBA core's reported length lies about how much the game actually wrote are set out, along
+/// with the rule that replaces the old length comparison. This function is the disk half of
+/// it: turn a `SavePlan` into either a write, a rename-then-write, or a refusal with a line in
+/// the log naming the rule and the shape of the bytes that stopped it.
+///
+/// `BackupAndWrite` is the answer for a shorter save whose dropped range is one repeated byte:
+/// filler, in a file a tool made rather than a cartridge erased. It is renamed aside first, so
+/// the write cannot be the thing that loses something nobody can prove was worthless -- and the
+/// cart is not locked out of saving, which is what the old length rule did to any card that had
+/// ever been played under gpSP (it answers 131072 for every cart, resolved or not).
+///
+/// `load_save_ram` can accept bytes it should have refused -- a libretro core that exposes a
+/// save-ram region copies `len.min(data.len())` bytes into it and returns `Ok` regardless, so a
+/// cart whose two cores disagree on `RETRO_MEMORY_SAVE_RAM`'s size truncates silently rather
+/// than failing loudly -- and that is the class of bug the plan's `RefuseShrink` is still the
+/// backstop for, since `resume_trusted`/`save_ram_trusted` cannot see it: as far as the core is
+/// concerned, it accepted what it was given. It is deliberately narrower than "the file is
+/// longer": a dropped range with real structure in it is a save being lost, and is still
+/// stopped, while a dropped range that is one value repeated is not.
 ///
 /// The comparison goes through `read_sav`, not a stat of `sav_path` alone: `read_sav` also
 /// accepts `Saves/<stem>.srm` (RetroArch's name for the same battery bytes, see its own doc
@@ -99,16 +114,64 @@ pub fn eject(
 /// loss shape the guard above exists to stop, just reached from the one path it could not see.
 pub fn write_sav(root: &Path, stem: &str, sav: &[u8]) -> std::io::Result<bool> {
     let path = sav_path(root, stem);
-    if let Some(old) = read_sav(root, stem) {
-        if old == sav {
+    let old = read_sav(root, stem);
+    let dropped = old
+        .as_deref()
+        .map_or(&[][..], |o| &o[sav.len().min(o.len())..]);
+    match save_plan(old.as_deref(), sav) {
+        SavePlan::Write => {}
+        SavePlan::Unchanged => return Ok(false),
+        // Silent on purpose, and not a refusal: a cart whose game has not saved anything yet
+        // reports this on every autosave, and there is nothing wrong with the cart. Creating
+        // the file is what would be wrong.
+        SavePlan::Blank => return Ok(false),
+        // Shorter, dropping a range that is one repeated byte but not the blank one: a file a
+        // tool made rather than a chip erased. It is not a save that can be read, but it is not
+        // provably nothing either, so it is neither overwritten blind nor used as a reason to
+        // stop saving -- which is what it used to be, for good, on any card that had been
+        // played under gpSP (it answers 131072 for every cart).
+        SavePlan::BackupAndWrite => {
+            let from = found_sav_path(root, stem);
+            let to = backup_path(&from);
+            match std::fs::rename(&from, &to) {
+                Ok(()) => eprintln!(
+                    "slot: save ram: {} was {} of filler past the {} bytes now reported; moved \
+                     it to {} and wrote the shorter save",
+                    from.display(),
+                    describe(dropped),
+                    sav.len(),
+                    to.display()
+                ),
+                Err(e) => {
+                    // Nothing was moved, so nothing may be written: leaving both files alone is
+                    // the only outcome here that cannot lose a save.
+                    eprintln!(
+                        "slot: save ram: could not move {} aside ({e}); refusing to shrink it \
+                         from {} to {} bytes",
+                        from.display(),
+                        old.as_deref().map_or(0, <[u8]>::len),
+                        sav.len()
+                    );
+                    return Ok(false);
+                }
+            }
+        }
+        SavePlan::RefuseShrink => {
+            eprintln!(
+                "slot: save ram: refusing to shrink {} from {} to {} bytes -- what would be \
+                 dropped holds {}",
+                found_sav_path(root, stem).display(),
+                old.as_deref().map_or(0, <[u8]>::len),
+                sav.len(),
+                describe(dropped)
+            );
             return Ok(false);
         }
-        if sav.len() < old.len() {
+        SavePlan::RefuseCompressed => {
             eprintln!(
-                "slot: save ram: refusing to shrink {} from {} to {} bytes",
-                path.display(),
-                old.len(),
-                sav.len()
+                "slot: save ram: refusing to overwrite the compressed RetroArch save {} \
+                 (turn off RetroArch's save-file compression and re-export it)",
+                found_sav_path(root, stem).display()
             );
             return Ok(false);
         }
@@ -127,6 +190,72 @@ pub fn read_sav(root: &Path, stem: &str) -> Option<Vec<u8>> {
     std::fs::read(sav_path(root, stem))
         .or_else(|_| std::fs::read(crate::root::saves_dir(root).join(format!("{stem}.srm"))))
         .ok()
+}
+
+/// What may be handed to a core, as opposed to `read_sav`, which is what is on the card.
+///
+/// A save RetroArch compressed is an rzip container: 20 bytes of its own header where the
+/// game's first bytes belong, then a deflate stream. A core handed that as its save ram takes
+/// it literally and reads a save it cannot parse, which the game shows as a corrupted save
+/// rather than as a missing one. Loading nothing gives it a fresh save it can then write over,
+/// and it is the same answer the write side gives when it leaves the file alone -- so a card
+/// with a compressed save on it neither loses the file nor pretends to use it.
+pub fn load_sav(root: &Path, stem: &str) -> Option<Vec<u8>> {
+    let data = read_sav(root, stem)?;
+    if is_rzip(&data) {
+        eprintln!(
+            "slot: save ram: {} is a compressed RetroArch save; loading nothing rather than \
+             feeding its rzip bytes to the core",
+            found_sav_path(root, stem).display()
+        );
+        return None;
+    }
+    Some(data)
+}
+
+/// Where `SavePlan::BackupAndWrite` puts the file it replaces
+/// `Saves/<stem>.sav.bak-<bytes>`, naming the size it had, so a card carrying two of them says
+/// which is which without a stat.
+///
+/// A numbered sibling is used when that name is taken, rather than overwriting: the whole
+/// reason this file is renamed instead of deleted is that nobody can prove it is worthless, and
+/// that argument does not expire the second time a cart hits this. The loop bound is a
+/// formality so an unwritable name cannot become an infinite one; past it the plain name is
+/// reused, which is still better than refusing to save.
+fn backup_path(from: &Path) -> PathBuf {
+    let name = from.file_name().and_then(|n| n.to_str()).unwrap_or("save");
+    let size = std::fs::metadata(from).map_or(0, |m| m.len());
+    let candidate = |n: usize| {
+        let nth = if n == 1 {
+            String::new()
+        } else {
+            format!("-{n}")
+        };
+        from.with_file_name(format!("{name}.bak-{size}{nth}"))
+    };
+    for n in 1..100 {
+        let path = candidate(n);
+        if !path.exists() {
+            return path;
+        }
+    }
+    candidate(1)
+}
+
+/// Which of the two files this cart's save actually lives in. `read_sav` prefers `.sav` and
+/// falls back to `.srm`, so a message that always names `.sav` sends the player to a file that
+/// is not the one being talked about.
+fn found_sav_path(root: &Path, stem: &str) -> PathBuf {
+    let sav = sav_path(root, stem);
+    if sav.exists() {
+        return sav;
+    }
+    let srm = crate::root::saves_dir(root).join(format!("{stem}.srm"));
+    if srm.exists() {
+        srm
+    } else {
+        sav
+    }
 }
 
 /// The counterpart to the resume write in `flush`. Without this the cart is seated on the

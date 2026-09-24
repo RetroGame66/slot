@@ -103,12 +103,20 @@ fn an_unchanged_battery_save_is_not_rewritten() {
 /// two lengths actually matched. If a cart's two cores disagree on `RETRO_MEMORY_SAVE_RAM`'s
 /// size, switching cores would otherwise truncate the player's save on the very next write,
 /// silently: the core accepted what it was given, so nothing upstream of `write_sav` has any
-/// reason to doubt it. This is the backstop `write_sav` itself carries: a shorter save than
-/// what is already on the card is refused and logged rather than trusted.
+/// reason to doubt it. This is the backstop `write_sav` itself carries: a shorter save whose
+/// dropped range holds real data is refused and logged rather than trusted.
+///
+/// The larger save here is *structured* past the shorter write's end on purpose. A dropped
+/// range that is one value repeated is filler, not a save, and is moved aside instead of
+/// refused — see `write_sav_moves_a_tool_made_tail_aside_and_writes`. What this test is about
+/// is the case that must still stop, so it has to look like a save.
 #[test]
 fn write_sav_refuses_to_shrink_an_existing_save() {
     let d = tmp_root_with_carts(&["Emerald"]);
-    let big = vec![0xEEu8; 4096];
+    let mut big = vec![0xEEu8; 4096];
+    for (i, b) in big.iter_mut().enumerate().skip(512) {
+        *b = (i % 251) as u8;
+    }
     let small = vec![0x11u8; 512];
     slot::persist::write_sav(d.path(), "Emerald", &big).unwrap();
 
@@ -135,6 +143,48 @@ fn write_sav_refuses_to_shrink_an_existing_save() {
     );
 }
 
+/// The other half of the same rule, and the shape the player reports are about. gpSP answers
+/// 131072 for every GBA cart, resolved or not, and a save file that a frontend pre-created
+/// holds zeroes past the real save where a cartridge would have erased to `0xFF`. So a card
+/// that has been played under gpSP holds 128 KB for a 32 KB game, every later mGBA write is
+/// shorter than it, and the old length rule refused all of them for good.
+///
+/// Now it is moved aside and the shorter save is written: the cart saves again, and what was
+/// there is still on the card.
+#[test]
+fn write_sav_moves_a_tool_made_tail_aside_and_writes() {
+    let d = tmp_root_with_carts(&["Emerald"]);
+    let sav = |len: usize, fill: u8| vec![fill; len];
+    let mut big = vec![0x00u8; 131_072];
+    big[..32_768].fill(0xEE);
+    slot::persist::write_sav(d.path(), "Emerald", &big).unwrap();
+
+    let small = sav(32_768, 0x11);
+    let wrote = slot::persist::write_sav(d.path(), "Emerald", &small).unwrap();
+    assert!(wrote, "a filler tail must not lock the cart out of saving");
+    assert_eq!(
+        std::fs::read(d.path().join("Saves/Emerald.sav")).unwrap(),
+        small,
+        "the shorter save is what the cart must now be reading"
+    );
+    assert_eq!(
+        std::fs::read(d.path().join("Saves/Emerald.sav.bak-131072")).unwrap(),
+        big,
+        "what was there must still be on the card"
+    );
+
+    // A second one keeps both: the reason for renaming rather than deleting does not expire
+    // the second time a cart hits this.
+    slot::persist::write_sav(d.path(), "Emerald", &sav(131_072, 0x00)).unwrap();
+    let wrote = slot::persist::write_sav(d.path(), "Emerald", &sav(32_768, 0x22)).unwrap();
+    assert!(wrote);
+    assert!(
+        d.path().join("Saves/Emerald.sav.bak-131072-2").exists(),
+        "the second backup must not have overwritten the first"
+    );
+    assert!(d.path().join("Saves/Emerald.sav.bak-131072").exists());
+}
+
 /// The `.srm`-only twin of the test above. `read_sav` accepts `Saves/<stem>.srm` as well as
 /// `.sav` — RetroArch's name for the same battery bytes — but the shrink guard used to stat
 /// `.sav` alone. A card carrying nothing but an `.srm` therefore had no guard at all: a core
@@ -145,7 +195,12 @@ fn write_sav_refuses_to_shrink_an_existing_save() {
 #[test]
 fn write_sav_refuses_to_shrink_an_existing_srm() {
     let d = tmp_root_with_carts(&["Emerald"]);
-    let big = vec![0xEEu8; 131_072];
+    // Structured past the shorter write's end, for the same reason as the `.sav` twin above:
+    // one value repeated would be filler, and filler is no longer refused.
+    let mut big = vec![0xEEu8; 131_072];
+    for (i, b) in big.iter_mut().enumerate().skip(8_192) {
+        *b = (i % 251) as u8;
+    }
     std::fs::write(d.path().join("Saves/Emerald.srm"), &big).unwrap();
 
     let small = vec![0x11u8; 8_192];

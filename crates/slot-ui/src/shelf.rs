@@ -1,7 +1,7 @@
 use slot_gfx::{Draw, TexId, OUT_H, OUT_W};
 use slot_store::Cart;
 
-use crate::cart::{label_colour, label_text, CART_H, CART_W};
+use crate::cart::{label_colour, label_panel, label_text, CART_H, CART_W};
 use crate::hud::Millis;
 use crate::slot_chrome::draw_empty_slot;
 
@@ -28,6 +28,10 @@ const OMEGA: f32 = 16.0;
 /// How far the cart next to the selection is pushed aside as the chosen one goes in. Enough
 /// to clear the frame from where it stands.
 const PART: f32 = 130.0;
+/// How much a face-less cart is stretched along the row while the ring glides. Small on
+/// purpose: a cart stretched far enough to notice as a *shape* stops reading as a cart, and the
+/// point is speed rather than distortion. Exactly 1 at rest, so a still row is untouched.
+const SMEAR: f32 = 1.12;
 
 /// Slots considered either side of the selection. Two reach the edges of a 720 row, the
 /// third covers the lag while the spring is still catching up with a flick.
@@ -57,6 +61,21 @@ struct Glide {
     dur: f32,
 }
 
+/// One cart's place on screen this frame, addressed by its index in `Shelf::carts`.
+///
+/// The row's layout, stated once and read twice: `draw_row` draws the faces from it, and the
+/// favourites star is placed from it, so a mark on a cart cannot drift off the cart it marks.
+pub struct SlotRect {
+    pub cart: usize,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// The cart's own opacity: 1.0 at the selection, `SIDE_ALPHA` at and past one slot out,
+    /// then cut by the `recede` the caller asked for.
+    pub alpha: f32,
+}
+
 /// The glide's length in seconds, as a function of the carts it has to cross. Short jumps are
 /// near a spring's own settle so a single-letter step does not feel slower than an arrow; the
 /// cap keeps a four-hundred cart jump from becoming a slideshow.
@@ -66,6 +85,14 @@ fn glide_seconds(distance: f32) -> f32 {
 
 pub struct Shelf {
     pub carts: Vec<Cart>,
+    /// The carts the ring actually walks, as indices into `carts`. The full library when
+    /// nothing is filtered; the starred ones while the favourites shelf is up. A list of
+    /// indices rather than a rebuilt cart list, and that is the whole point: `faces` stays
+    /// indexed by the library, so every texture the row was showing is the same texture after
+    /// the view changes. Rebuilding the shelf instead would drop those faces and put blank
+    /// placeholders on screen while they were rasterised again.
+    view: Vec<usize>,
+    /// Position in `view`, not an index into `carts`. `current()` is what turns it back.
     pub index: usize,
     pub scroll: f32,
     /// One slot per cart, `None` until its face has been rasterised and uploaded. The
@@ -91,8 +118,10 @@ pub struct Shelf {
 
 impl Shelf {
     pub fn new(carts: Vec<Cart>) -> Self {
+        let view = (0..carts.len()).collect();
         Shelf {
             carts,
+            view,
             index: 0,
             scroll: 0.0,
             faces: Vec::new(),
@@ -164,7 +193,7 @@ impl Shelf {
     /// step the row already draws cleanly.
     pub fn glide_to_target(&mut self) {
         let rows = SLOTS * 2 + 1;
-        if (self.carts.len() as i32) < rows {
+        if (self.view.len() as i32) < rows {
             self.glide = None;
             self.vel = 0.0;
             return;
@@ -178,6 +207,55 @@ impl Shelf {
             dur: glide_seconds((to - from).abs()),
         });
         self.vel = 0.0;
+    }
+
+    /// Which way the ring is travelling while it glides, or `None` at rest. The smear and its
+    /// trail hang off this: a still row must be drawn exactly as it always was.
+    pub(crate) fn glide_dir(&self) -> Option<f32> {
+        self.glide
+            .map(|g| (g.to - g.from).signum())
+            .filter(|d| *d != 0.0)
+    }
+
+    /// The cart the caret is on, as an index into `carts`. `None` only for an empty view.
+    pub fn current(&self) -> Option<usize> {
+        self.view.get(self.index).copied()
+    }
+
+    /// The cart itself, which is what most callers actually want.
+    pub fn current_cart(&self) -> Option<&Cart> {
+        self.carts.get(self.current()?)
+    }
+
+    /// Whether the view is narrower than the library — i.e. the favourites shelf is up.
+    pub fn filtered(&self) -> bool {
+        self.view.len() != self.carts.len()
+    }
+
+    /// Swap the set of carts the ring walks. The frame — the shadow and the placeholder — is
+    /// the shelf's rather than the list's, so it is left alone; `faces` is left alone too, for
+    /// the reason `view` is a list of indices. The caret is parked on `keep` when the new view
+    /// still holds it, and on the first cart otherwise.
+    pub fn set_view(&mut self, view: Vec<usize>, keep: Option<&str>) {
+        self.view = view;
+        self.index = keep
+            .and_then(|stem| self.view.iter().position(|&i| self.carts[i].stem == stem))
+            .unwrap_or(0);
+        self.scroll = self.index as f32;
+        self.vel = 0.0;
+        self.glide = None;
+        self.held = None;
+    }
+
+    /// The carts the current view walks, in view order. A view is a list of indices, so this
+    /// is how a caller that needs the carts themselves — the letter tally — reads one.
+    pub fn visible(&self) -> Vec<&Cart> {
+        self.view.iter().map(|&i| &self.carts[i]).collect()
+    }
+
+    #[cfg(test)]
+    pub fn view_len(&self) -> usize {
+        self.view.len()
     }
 
     pub fn left(&mut self) {
@@ -238,7 +316,7 @@ impl Shelf {
     }
 
     fn step(&mut self, by: i32) {
-        let n = self.carts.len();
+        let n = self.view.len();
         if n == 0 {
             return;
         }
@@ -252,7 +330,7 @@ impl Shelf {
     /// is a ring, so the selected cart has an image every `n` slots; this is the one nearest
     /// where the row already is, which is what stops a wrap unwinding the whole row.
     pub fn scroll_target(&self) -> f32 {
-        let n = self.carts.len();
+        let n = self.view.len();
         if n == 0 {
             return 0.0;
         }
@@ -265,13 +343,13 @@ impl Shelf {
     /// left and right neighbours are the same one, and a row holding it twice reads as a
     /// bug. The row is left with a gap instead.
     pub fn cart_at_offset(&self, off: i32) -> Option<usize> {
-        let n = self.carts.len() as i32;
+        let n = self.view.len() as i32;
         if n == 0 {
             return None;
         }
         let r = off.rem_euclid(n);
         let nearest = if r * 2 > n { r - n } else { r };
-        (nearest == off).then(|| (self.index as i32 + off).rem_euclid(n) as usize)
+        (nearest == off).then(|| self.view[(self.index as i32 + off).rem_euclid(n) as usize])
     }
 
     pub fn update(&mut self, dt: f32) {
@@ -327,11 +405,127 @@ impl Shelf {
         dim: f32,
         out: &mut Vec<Draw>,
     ) {
-        let recede = recede.clamp(0.0, 1.0);
         let dim = dim.clamp(0.0, 1.0);
-        let n = self.carts.len() as i64;
+        for r in self.slot_rects(hidden, shake, recede) {
+            let cart = &self.carts[r.cart];
+            // Black in the cart's own shape, under the dimmed face. Without it the dimming is
+            // transparency, and over a wallpaper the row reads as ghosts of carts.
+            if r.alpha < 1.0 {
+                if let Some(tex) = self.shadow {
+                    out.push(Draw::Tex {
+                        x: r.x,
+                        y: r.y,
+                        w: r.w,
+                        h: r.h,
+                        tex,
+                        alpha: recede_alpha(r.alpha),
+                    });
+                }
+            }
+            out.push(match self.faces.get(r.cart).copied().flatten() {
+                Some(tex) => Draw::Tex {
+                    x: r.x,
+                    y: r.y,
+                    w: r.w,
+                    h: r.h,
+                    tex,
+                    alpha: r.alpha * dim,
+                },
+                // A cart whose face has not been uploaded still holds its place, and as a cart.
+                // A jump across the alphabet crosses hundreds of carts and hundreds of faces
+                // cannot be held at once — but every cart can still carry *its own* colour, so
+                // the row reads as a ribbon of labels going past rather than as a row of empty
+                // cases. The shell goes down, then one solid quad in the panel `label_panel`
+                // defines, in the colour this cart's own title hashes to: no texture is minted
+                // and nothing is rasterised, which is the whole reason it can be done at all.
+                None => match self.placeholder {
+                    Some(tex) => {
+                        let c = label_colour(&label_text(cart));
+                        let (x0, y0, x1, y1) = label_panel(r.w as u32, r.h as u32);
+                        let ink = [
+                            c[0] as f32 / 255.0,
+                            c[1] as f32 / 255.0,
+                            c[2] as f32 / 255.0,
+                            r.alpha * dim,
+                        ];
+                        // While the ring glides, a cart with no face of its own is smeared along
+                        // the travel: one fainter copy behind it and both stretched a little. A
+                        // jump crosses hundreds of carts in well under a second, and a plain cart
+                        // sliding past at that speed reads as a slideshow; the smear is what tells
+                        // the eye it is moving fast. Only the placeholder carts get it — a cart
+                        // wearing a real face is the game's own picture, and smearing that would be
+                        // a lie about the art — and at rest the stretch is exactly 1.
+                        let (dir, grow) = match self.glide_dir() {
+                            Some(dir) => (dir, r.w * (SMEAR - 1.0)),
+                            None => (0.0, 0.0),
+                        };
+                        if grow > 0.0 {
+                            let alpha = r.alpha * dim * 0.30;
+                            let tx = r.x - dir * grow * 2.0;
+                            out.push(Draw::Tex {
+                                x: tx - grow / 2.0,
+                                y: r.y,
+                                w: r.w + grow,
+                                h: r.h,
+                                tex,
+                                alpha,
+                            });
+                            out.push(Draw::Rect {
+                                x: tx + x0 as f32 - grow / 2.0,
+                                y: r.y + y0 as f32,
+                                w: (x1 - x0) as f32 + grow,
+                                h: (y1 - y0) as f32,
+                                colour: [ink[0], ink[1], ink[2], alpha],
+                            });
+                        }
+                        out.push(Draw::Tex {
+                            x: r.x - grow / 2.0,
+                            y: r.y,
+                            w: r.w + grow,
+                            h: r.h,
+                            tex,
+                            alpha: r.alpha * dim,
+                        });
+                        out.push(Draw::Rect {
+                            x: r.x - grow / 2.0 + x0 as f32,
+                            y: r.y + y0 as f32,
+                            w: (x1 - x0) as f32 + grow,
+                            h: (y1 - y0) as f32,
+                            colour: ink,
+                        });
+                        continue;
+                    }
+                    None => {
+                        let c = label_colour(&label_text(cart));
+                        Draw::Rect {
+                            x: r.x,
+                            y: r.y,
+                            w: r.w,
+                            h: r.h,
+                            colour: [
+                                c[0] as f32 / 255.0,
+                                c[1] as f32 / 255.0,
+                                c[2] as f32 / 255.0,
+                                r.alpha * dim,
+                            ],
+                        }
+                    }
+                },
+            });
+        }
+    }
+
+    /// Where each cart the row would draw sits this frame, in draw order and in offscreen
+    /// pixels. The one piece of layout the row and a mark drawn over it — the favourites star —
+    /// must agree about, so it is stated once and read twice rather than written twice.
+    ///
+    /// `hidden` drops one cart by stem, which is how the shelf gets out of the way of the copy
+    /// the chrome is sliding into the slot.
+    pub fn slot_rects(&self, hidden: Option<&str>, shake: f32, recede: f32) -> Vec<SlotRect> {
+        let recede = recede.clamp(0.0, 1.0);
+        let n = self.view.len() as i64;
         if n == 0 {
-            return;
+            return Vec::new();
         }
         // The row is laid out around where it *is*, not around the cart it is heading for.
         // While a letter jump glides, `scroll` sweeps across everything between two letters
@@ -339,6 +533,7 @@ impl Shelf {
         // on the destination would leave the row blank for the length of the sweep. At rest
         // the two are the same place, so a still row is drawn exactly as it always was.
         let base = self.scroll.round() as i64;
+        let mut out = Vec::new();
         for slot in -SLOTS..=SLOTS {
             let off = slot as i64;
             let r = off.rem_euclid(n);
@@ -349,7 +544,7 @@ impl Shelf {
                 continue;
             }
             let coord = base + off;
-            let i = coord.rem_euclid(n) as usize;
+            let i = self.view[coord.rem_euclid(n) as usize];
             let cart = &self.carts[i];
             if hidden == Some(cart.stem.as_str()) {
                 continue;
@@ -366,62 +561,16 @@ impl Shelf {
             if x + w <= 0.0 || x >= OUT_W as f32 || alpha <= 0.0 {
                 continue;
             }
-            let x = x + shake;
-            let y = FOOT_Y - h;
-            // Black in the cart's own shape, under the dimmed face. Without it the dimming is
-            // transparency, and over a wallpaper the row reads as ghosts of carts.
-            if alpha < 1.0 {
-                if let Some(tex) = self.shadow {
-                    out.push(Draw::Tex {
-                        x,
-                        y,
-                        w,
-                        h,
-                        tex,
-                        alpha: recede_alpha(alpha),
-                    });
-                }
-            }
-            out.push(match self.faces.get(i).copied().flatten() {
-                Some(tex) => Draw::Tex {
-                    x,
-                    y,
-                    w,
-                    h,
-                    tex,
-                    alpha: alpha * dim,
-                },
-                // A cart whose face has not been uploaded still holds its place, and as a cart:
-                // the blank body rather than a gap, or the label's colour, in its place. A gap
-                // would read as a missing game; a colour block reads as paint sliding past when
-                // a jump crosses a hundred carts that never got built.
-                None => match self.placeholder {
-                    Some(tex) => Draw::Tex {
-                        x,
-                        y,
-                        w,
-                        h,
-                        tex,
-                        alpha: alpha * dim,
-                    },
-                    None => {
-                        let c = label_colour(&label_text(cart));
-                        Draw::Rect {
-                            x,
-                            y,
-                            w,
-                            h,
-                            colour: [
-                                c[0] as f32 / 255.0,
-                                c[1] as f32 / 255.0,
-                                c[2] as f32 / 255.0,
-                                alpha * dim,
-                            ],
-                        }
-                    }
-                },
+            out.push(SlotRect {
+                cart: i,
+                x: x + shake,
+                y: FOOT_Y - h,
+                w,
+                h,
+                alpha,
             });
         }
+        out
     }
 }
 

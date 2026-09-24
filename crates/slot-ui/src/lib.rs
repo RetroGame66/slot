@@ -59,7 +59,7 @@ pub use plate::{
 pub use polaroids::{photo_face, PhotoFace, Polaroids, DOT, LEGEND, PHOTO_H, PHOTO_W};
 pub use power_menu::{cheat_row_face, menu_face, PowerChoice, MENU_PAD};
 pub use refusal::Refusal;
-pub use shelf::{Shelf, CENTER_SCALE, SIDE_ALPHA};
+pub use shelf::{Shelf, SlotRect, CENTER_SCALE, SIDE_ALPHA};
 pub use shell::{
     lookup_order_is_exact_then_family_then_default, shell_for, table_keys, Finish, Shell,
     DEFAULT_SHELL,

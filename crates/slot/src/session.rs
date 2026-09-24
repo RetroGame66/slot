@@ -538,7 +538,7 @@ impl Session {
             open_core(&self.root, core),
             rom,
             self.sink.ring(),
-            persist::read_sav(&self.root, stem),
+            persist::load_sav(&self.root, stem),
             resume,
             self.audio,
         );

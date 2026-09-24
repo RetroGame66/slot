@@ -30,10 +30,20 @@ pub enum Icon {
     /// screen that has been sitting there all along.
     Sun,
     Moon,
+    /// The star a favourite cart wears, and the same star hollow for the shelf's indicator
+    /// while it is off. Solid and outline rather than one glyph tinted two ways, for the same
+    /// reason `FastForward` and `FastForwardLatched` differ only in fill: the silhouette stays
+    /// put and the weight carries the state, so an indicator that lights does not also move.
+    ///
+    /// Uploaded beside the rest of the icons so `frame()` bounds them with everything else —
+    /// the glyphs never reach the HUD's own bar, but a glyph outside `ALL` would be clipped by
+    /// a frame worked out without it.
+    Star,
+    StarOutline,
 }
 
 impl Icon {
-    pub const ALL: [Icon; 12] = [
+    pub const ALL: [Icon; 14] = [
         Icon::Volume,
         Icon::VolumeZero,
         Icon::VolumeMuted,
@@ -46,6 +56,8 @@ impl Icon {
         Icon::Charging,
         Icon::Sun,
         Icon::Moon,
+        Icon::Star,
+        Icon::StarOutline,
     ];
 
     /// Position in `ALL`, which is the order faces are uploaded in. Sound only while `ALL` is
@@ -76,6 +88,8 @@ impl Icon {
             Icon::Charging => '\u{f0e7}',
             Icon::Sun => '\u{f0599}',
             Icon::Moon => '\u{f0594}',
+            Icon::Star => '\u{f005}',
+            Icon::StarOutline => '\u{f006}',
         }
     }
 

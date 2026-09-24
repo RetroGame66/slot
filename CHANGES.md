@@ -2,12 +2,12 @@
 
 A diff against upstream **`4345cb8bdb`** (2026-09-11, *Merge branch 'feat/core-picker-board'*).
 
-**99 files changed, 9,377 insertions(+), 828 deletions(-)** across the branch — 19 added, 79
-modified, 1 deleted. **The change set proper is 92 of them: 15 added and 77 modified, at 8,313
-insertions and 753 deletions.** The other seven are this fork's notice and repository housekeeping
-(§12), which is what lets the tree stand on its own as a public fork of an MIT project.
+**104 files changed, 11,256 insertions(+), 904 deletions(-)** across the branch — 20 added, 82
+modified, 2 deleted. Some of them are this fork's notice and repository housekeeping rather than
+changes to the frontend (§12), which is what lets the tree stand on its own as a public fork of an
+MIT project.
 
-The counts above were taken again after §18 landed; every section is in them.
+The counts above were taken again after §19 landed; every section is in them.
 
 Everything below is listed by feature rather than by file, because that is how it was built:
 one concern at a time, with the files it touched.
@@ -413,6 +413,65 @@ where it was checking that two things differ it still says so without naming eit
 | `crates/*/tests/*` | The assertions that named a string, and the description-column test. |
 
 ---
+
+## 19. Favourites, a save that survives a smaller rewrite, and a sticker in the jump
+
+### 19.1 Favourites
+
+B on the shelf carries two gestures — a short press stars the cart under the caret, a hold swaps the
+shelf between the library and the starred carts — on the same press-then-release mechanism A already
+used for insert. Which of the two a press is cannot be known until it either comes up or passes the
+threshold, so the press is remembered and the release decides, exactly as A's is.
+
+| File | Change |
+|---|---|
+| `slot-store/src/slot_state.rs` | `favorites: BTreeSet<String>`, written one `favorites=` line per stem so a stem carrying `=`, a space or a comma survives the round trip. **The reader tolerates the key's absence**, like `mode`: a card that has never been starred carries no line, and reading that as corruption would throw the whole file away — the cart the user left selected, the brightness, the timezone — on the first boot of this build. |
+| `slot-ui/src/shelf.rs` | **The view.** `view: Vec<usize>` is the list of carts the ring walks; `faces` stays indexed by the library, so a swap reuses every face already rasterised rather than dropping them and showing placeholders while they are built again. `slot_rects()` states the row's layout once, so a mark drawn over a cart cannot drift off the cart it marks. |
+| `slot-ui/src/icon.rs` | `Icon::Star` (`\uf005`) and `Icon::StarOutline` (`\uf006`), appended to `ALL` so existing indices are untouched. |
+| `slot/src/app.rs` | `fav_held`/`fav_hold()` beside `play_held`/`play_hold()`; `toggle_favorite()`, `toggle_fav_view()`, `show_all()`, `show_favorites()`, `retally_letters()`; the star and the indicator. |
+| `slot/src/frontend.rs` | Three textures uploaded at boot — the star, and the indicator unlit and lit — because the star is the one glyph on the shelf drawn in a colour of its own rather than the case's ink. |
+
+Three decisions worth naming:
+
+- **Letter nav stands down on the favourites shelf.** The dial counts the library, and a view
+  narrower than the library would seat the caret on a cart the view does not hold.
+- **An empty favourites shelf is refused, not shown.** A screen with nothing on it and no way to tell
+  why is worse than the shake every other refusal gets.
+- **The star is inside the cart.** In the band the moulding leaves between the shell's curved top
+  edge and the label it reads as printed on the cartridge; floating above the row it read as a badge
+  on the shelf.
+
+### 19.2 A sticker in the jump
+
+A cart whose face has not been built — which is most of what a jump across the alphabet is made of —
+now carries its own label colour, and is smeared along the travel while the ring glides.
+
+| File | Change |
+|---|---|
+| `slot-ui/src/shelf.rs` | The placeholder branch of `draw_row` draws the shell, then one solid `Draw::Rect` in the panel `label_panel` defines, in `label_colour(stem)`. While `glide` is running, the cart and its label are stretched by `SMEAR` and one fainter copy is drawn behind them (`glide_dir()` gives the direction). At rest the stretch is exactly 1, so a still row is drawn as it always was, and a cart wearing a real face is never smeared — that is the game's own picture. |
+
+Two quads a cart and no new texture. A jump crosses hundreds of carts and hundreds of faces cannot be
+resident, but every cart can still hold its own colour, and the row no longer reads as empty cases
+going past.
+
+### 19.3 A save that shrinks to a single repeated byte
+
+The size guard refused any save shorter than the file on the card. That is right for a core that
+truncates a real save and wrong for a card written under one core and read under another — gpSP
+reports 128 KiB for every game while mGBA reports the game's real size, so the two disagree about a
+file that is neither of their doing, and the guard turned it into a save that could never be written
+again.
+
+| File | Change |
+|---|---|
+| `slot-store/src/sav.rs` | **New.** `save_plan(old, sav)` — pure, twenty tests. `Blank` / `Write` / `Unchanged` / `RefuseCompressed` / `RefuseShrink` / `BackupAndWrite`. The *shape* of the range that would be dropped decides: filler is a write, one repeated byte is a rename-aside, anything with structure is still a refusal. |
+| `slot/src/persist.rs` | `write_sav` dispatches on the plan; `load_sav()` — an rzip container is recognised and not fed to the core; `backup_path()`. |
+| `slot-store/src/lib.rs`, `slot/src/session.rs` | The exports, and the read path. |
+| `slot/tests/eject.rs` | The integration case: a cart whose old file is longer than the core now reports still lands. |
+
+The property the change is built around: **what could be written before can still be written**, and
+what is refused is a subset of what was refused. A wrong plan costs a `.bak` next to the save, not
+the save.
 
 ## Notes for a reader of the diff
 

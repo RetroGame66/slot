@@ -255,6 +255,16 @@ impl Frontend {
     /// — the compositor has no `destroy_texture` — which is a few hundred kilobytes a switch on
     /// a device with sixteen megabytes of heap. Worth saying out loud rather than leaving for
     /// someone to find in a memory graph.
+    /// How tall the star a starred cart wears is drawn. Larger than the indicator: it is read
+    /// at the size of the cart it sits above, where the indicator is a lamp in a corner.
+    const FAV_STAR_PX: f32 = 30.0;
+    /// How tall the shelf's indicator is drawn.
+    const FAV_IND_PX: f32 = 24.0;
+    /// The star's own colour, and the only thing on the shelf that is neither the case's ink
+    /// nor the palette's. A favourite is a fact about the cart rather than about which mode the
+    /// frontend is in, so it stays the same colour in both.
+    const FAV_INK: [u8; 3] = [0xff, 0xc4, 0x1e];
+
     fn upload_fixed(&mut self, compositor: &mut Compositor) {
         let icons = Icon::ALL
             .iter()
@@ -264,6 +274,24 @@ impl Frontend {
             })
             .collect();
         self.session.app_mut().set_icon_faces(icons);
+        // The favourites: the star a starred cart wears, and the shelf's indicator, unlit and
+        // lit. Uploaded here with the rest of the fixed furniture, because none of the three
+        // ever changes — the indicator lights by drawing the other face, not by re-rasterising.
+        let star = icon_face(Icon::Star, Self::FAV_STAR_PX, Self::FAV_INK);
+        let star = (
+            compositor.create_texture(star.w, star.h, &star.rgba),
+            star.w,
+            star.h,
+        );
+        let off = icon_face(Icon::StarOutline, Self::FAV_IND_PX, slot_ui::palette::ink());
+        let off = (
+            compositor.create_texture(off.w, off.h, &off.rgba),
+            off.w,
+            off.h,
+        );
+        let on = icon_face(Icon::Star, Self::FAV_IND_PX, Self::FAV_INK);
+        let on = (compositor.create_texture(on.w, on.h, &on.rgba), on.w, on.h);
+        self.session.app_mut().set_fav_faces(star, off, on);
         // Its own upload rather than one of the HUD's: it is drawn on a cart, at its own
         // size, and in a warning colour the level glyphs have no business borrowing.
         let alert = icon_face(Icon::Alert, ALERT_PX, ALERT_INK);
