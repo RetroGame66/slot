@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::path::Path;
 
 /// GBA cartridge header: a 12 byte ASCII game title, NUL padded on the right.
@@ -14,6 +14,9 @@ const CODE_LEN: usize = 4;
 /// Everything the shelf wants out of a header, and the point at which the read stops. The
 /// game code is the last field in it, so this is exactly as far as anything here reaches.
 const HEAD_LEN: u64 = (CODE_OFF + CODE_LEN) as u64;
+
+/// Offset of the Super Game Boy flag byte in a Game Boy / Game Boy Color cartridge header.
+const SGB_FLAG_OFF: usize = 0x146;
 
 /// Title and code, in one read.
 ///
@@ -53,6 +56,31 @@ pub fn header_code(rom: &Path) -> Option<String> {
     (!code.is_empty()).then_some(code)
 }
 
+/// Whether a GB/GBC rom carries Super Game Boy enhancements, and so would draw an SGB
+/// border under mGBA's default `mgba_sgb_borders = ON`.
+///
+/// The flag byte at `0x146` is `0x03` on carts that use SGB functions — the same games that
+/// ship the SGB's decorative border art. `0x00` is a plain Game Boy cart; `0x01`/`0x02` are
+/// reserved. A missing or truncated rom reads as not enhanced rather than erroring, because a
+/// shelf still has to show it whatever its header says.
+///
+/// SLOT turns mGBA's SGB border off (it draws its own bezel), so this is mostly a way to
+/// tell those carts apart — and to log which ones a hand debugging "framed differently"
+/// complaints are really about.
+pub fn sgb_enhanced(rom: &Path) -> bool {
+    let Ok(mut file) = File::open(rom) else {
+        return false;
+    };
+    // Seek to the flag and read it; `read` returns short on a rom shorter than 0x147 bytes,
+    // leaving the buffer zeroed — the not-enhanced answer, not a panic on a truncated file.
+    if file.seek(std::io::SeekFrom::Start(SGB_FLAG_OFF as u64)).is_err() {
+        return false;
+    }
+    let mut flag = [0u8; 1];
+    let n = file.read(&mut flag).unwrap_or(0);
+    n == 1 && flag[0] == 0x03
+}
+
 fn field_at(buf: &[u8], off: usize, len: usize) -> Option<String> {
     text_from_bytes(buf.get(off..off + len)?)
 }
@@ -65,7 +93,7 @@ fn text_from_bytes(buf: &[u8]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{header, text_from_bytes};
+    use super::{header, sgb_enhanced, text_from_bytes};
     use std::io::Write;
 
     #[test]
@@ -112,5 +140,35 @@ mod tests {
             header(&dir.path().join("nope.gba")),
             (String::new(), String::new())
         );
+    }
+
+    #[test]
+    fn sgb_flag_at_0x146_distinguishes_enhanced_carts() {
+        let dir = tempfile::tempdir().unwrap();
+        // SGB-enhanced: flag byte == 0x03.
+        let sgb = dir.path().join("Enhanced.gb");
+        let mut bytes = vec![0u8; 0x148];
+        bytes[0x146] = 0x03;
+        std::fs::write(&sgb, &bytes).unwrap();
+        assert!(sgb_enhanced(&sgb));
+        // Plain cart: flag byte == 0x00. Its own buffer, not the one above — reusing that one
+        // wrote 0x03 into this file as well and the assertion below could never have held.
+        let plain = dir.path().join("Plain.gb");
+        std::fs::write(&plain, vec![0u8; 0x148]).unwrap();
+        assert!(!sgb_enhanced(&plain));
+        // Reserved / other values are not enhanced.
+        for f in [0x01u8, 0x02, 0xff] {
+            let r = dir.path().join(format!("R{f:x}.gb"));
+            let mut b = vec![0u8; 0x148];
+            b[0x146] = f;
+            std::fs::write(&r, &b).unwrap();
+            assert!(!sgb_enhanced(&r), "flag {f:#x} is not SGB-enhanced");
+        }
+        // A rom shorter than the flag offset reads as not enhanced, not an error.
+        let tiny = dir.path().join("Tiny.gb");
+        std::fs::write(&tiny, [0u8; 8]).unwrap();
+        assert!(!sgb_enhanced(&tiny));
+        // A missing rom reads as not enhanced.
+        assert!(!sgb_enhanced(&dir.path().join("nope.gb")));
     }
 }

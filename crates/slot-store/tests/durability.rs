@@ -40,7 +40,8 @@ fn slot_state_round_trips_including_a_stem_with_an_equals_sign() {
         clock_set: true,
         utc_offset_min: 0,
         mode: Mode::Light,
-    };
+    
+    favorites: Default::default(),};
     write_slot_state(d.path(), &s).unwrap();
     assert_eq!(read_slot_state(d.path()), s);
 }
@@ -156,7 +157,8 @@ fn slot_state_round_trips_a_negative_utc_offset() {
         clock_set: true,
         utc_offset_min: -450,
         mode: Mode::Dark,
-    };
+    
+    favorites: Default::default(),};
     write_slot_state(d.path(), &s).unwrap();
     assert_eq!(read_slot_state(d.path()).utc_offset_min, -450);
 }

@@ -40,10 +40,15 @@ pub enum Icon {
     /// a frame worked out without it.
     Star,
     StarOutline,
+    /// Light-mode favourites mark: a hollow peach-red heart (off) and a filled one (on), used
+    /// instead of the star so the mark reads against the off-white case where the yellow star
+    /// disappears. Same silhouette-stays-put, weight-carries-state logic as the stars.
+    Heart,
+    HeartOutline,
 }
 
 impl Icon {
-    pub const ALL: [Icon; 14] = [
+    pub const ALL: [Icon; 16] = [
         Icon::Volume,
         Icon::VolumeZero,
         Icon::VolumeMuted,
@@ -58,6 +63,8 @@ impl Icon {
         Icon::Moon,
         Icon::Star,
         Icon::StarOutline,
+        Icon::Heart,
+        Icon::HeartOutline,
     ];
 
     /// Position in `ALL`, which is the order faces are uploaded in. Sound only while `ALL` is
@@ -90,6 +97,10 @@ impl Icon {
             Icon::Moon => '\u{f0594}',
             Icon::Star => '\u{f005}',
             Icon::StarOutline => '\u{f006}',
+            // The light-mode favourites pair, in the same FontAwesome set as the stars so the
+            // frame box already holds them: a solid heart and its outline.
+            Icon::Heart => '\u{f004}',
+            Icon::HeartOutline => '\u{f08a}',
         }
     }
 

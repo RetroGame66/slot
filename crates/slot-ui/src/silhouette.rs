@@ -1,31 +1,87 @@
 use std::sync::OnceLock;
 
-use crate::cart::{FACE_H, FACE_W};
+use slot_store::System;
 
-const CART_SVG: &str = include_str!("../assets/cart.svg");
-const DETAIL_SVG: &str = include_str!("../assets/cart_detail.svg");
+const CART_GBA_SVG: &str = include_str!("../assets/cart.svg");
+const CART_GB_SVG: &str = include_str!("../assets/cart_gb.svg");
+const CART_GBC_SVG: &str = include_str!("../assets/cart_gbc.svg");
+const DETAIL_GBA_SVG: &str = include_str!("../assets/cart_detail.svg");
+/// Shared by class A, B and C, which is why there is one of it rather than two.
+const DETAIL_GB_SVG: &str = include_str!("../assets/cart_gb_detail.svg");
 
-/// Coverage of the cart outline, one byte per pixel, row major.
-pub fn silhouette(w: u32, h: u32) -> Vec<u8> {
-    rasterise(w, h).unwrap_or_else(|| vec![255; (w * h) as usize])
+/// Which of the three shells a machine's carts are: the Advance cart's landscape outline, and
+/// the Game Boy family's portrait one — carrying the top notch for class A and B (the grey and
+/// black carts) and not for class C (Game Boy Color only), which is the physical lockout.
+fn outline(system: System) -> &'static str {
+    match system {
+        System::Gba => CART_GBA_SVG,
+        System::Gb => CART_GB_SVG,
+        System::Gbc => CART_GBC_SVG,
+    }
 }
 
-/// Every cart is the same shape, so the mask is rasterised once and multiplied into faces.
-/// Rasterised at the face resolution so the higher-res cart stays crisp.
-pub(crate) fn cart_mask() -> &'static [u8] {
-    static MASK: OnceLock<Vec<u8>> = OnceLock::new();
-    MASK.get_or_init(|| silhouette(FACE_W, FACE_H))
+fn detail(system: System) -> &'static str {
+    match system {
+        System::Gba => DETAIL_GBA_SVG,
+        System::Gb | System::Gbc => DETAIL_GB_SVG,
+    }
+}
+
+fn index(system: System) -> usize {
+    match system {
+        System::Gba => 0,
+        System::Gb => 1,
+        System::Gbc => 2,
+    }
+}
+
+/// Everything one machine's shell needs: shaped, depth-mapped, detailed. Rasterised once, at
+/// the first face that asks for it, at that machine's own face size.
+struct Masks {
+    mask: Vec<u8>,
+    depth: Vec<u8>,
+    detail: Vec<u8>,
+}
+
+static MASKS: [OnceLock<Masks>; 3] = [const { OnceLock::new() }; 3];
+
+fn masks(system: System, w: u32, h: u32) -> &'static Masks {
+    MASKS[index(system)].get_or_init(|| {
+        let mask =
+            rasterise_svg(outline(system), w, h).unwrap_or_else(|| vec![255; (w * h) as usize]);
+        let depth = depth_map(&mask, w as usize, h as usize);
+        let detail =
+            rasterise_svg(detail(system), w, h).unwrap_or_else(|| vec![0; (w * h) as usize]);
+        Masks { mask, depth, detail }
+    })
+}
+
+/// Coverage of the cart outline, one byte per pixel, row major.
+pub fn silhouette(system: System, w: u32, h: u32) -> &'static [u8] {
+    &masks(system, w, h).mask
+}
+
+/// Every cart of a machine is the same shape, so the mask is rasterised once per machine and
+/// multiplied into its faces. Rasterised at the face resolution so the cart stays crisp at the
+/// largest size the shelf draws it.
+pub(crate) fn cart_mask(system: System, w: u32, h: u32) -> &'static [u8] {
+    silhouette(system, w, h)
 }
 
 /// How far inside the outline each pixel sits, in city block steps, saturating at 255. A
 /// translucent shell fades from its edge inward and needs the distance, not the coverage.
-pub(crate) fn cart_depth() -> &'static [u8] {
-    static DEPTH: OnceLock<Vec<u8>> = OnceLock::new();
-    DEPTH.get_or_init(|| depth_map(cart_mask(), FACE_W as usize, FACE_H as usize))
+pub(crate) fn cart_depth(system: System, w: u32, h: u32) -> &'static [u8] {
+    &masks(system, w, h).depth
 }
 
-/// Two pass chamfer. Everything off the edge of the buffer counts as outside, so a pixel on
-/// the top row is one step in rather than unreachable.
+/// The moulded detail: the grip ridge above the label and the thumb notch below it. Shaded into
+/// the shell rather than drawn in a fixed colour, so it belongs to whatever colour the cart is.
+pub(crate) fn detail_mask(system: System, w: u32, h: u32) -> &'static [u8] {
+    &masks(system, w, h).detail
+}
+
+/// Two pass chamfer. Everything off the edge of the buffer counts as outside, so a pixel on the
+/// top row is one step in rather than unreachable.
 fn depth_map(mask: &[u8], w: usize, h: usize) -> Vec<u8> {
     let mut d: Vec<u8> = mask
         .iter()
@@ -56,22 +112,6 @@ fn depth_map(mask: &[u8], w: usize, h: usize) -> Vec<u8> {
         }
     }
     d
-}
-
-/// The moulded detail: the grip ridge above the label and the thumb notch at the bottom.
-/// Shaded into the shell rather than drawn in a fixed colour, so it belongs to whatever
-/// colour the cart is.
-pub(crate) fn detail_mask() -> &'static [u8] {
-    static MASK: OnceLock<Vec<u8>> = OnceLock::new();
-    MASK.get_or_init(|| {
-        let svg = DETAIL_SVG;
-        rasterise_svg(svg, FACE_W, FACE_H).unwrap_or_else(|| vec![0; (FACE_W * FACE_H) as usize])
-    })
-}
-
-fn rasterise(w: u32, h: u32) -> Option<Vec<u8>> {
-    let svg = CART_SVG;
-    rasterise_svg(svg, w, h)
 }
 
 fn rasterise_svg(svg: &str, w: u32, h: u32) -> Option<Vec<u8>> {

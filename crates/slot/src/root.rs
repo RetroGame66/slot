@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use slot_store::System;
+
 use crate::audio::Profile;
 use crate::input::Remap;
 
@@ -25,8 +27,18 @@ pub fn ensure(root: &Path) {
     for sub in DIRS {
         let _ = std::fs::create_dir_all(root.join(sub));
     }
-    let _ = std::fs::create_dir_all(root.join(FONT_DIR));
-}
+        let _ = std::fs::create_dir_all(root.join(FONT_DIR));
+        // The screen-overlay folder, flat: the user drops `gb.png`, `gb-01.png`, `gbc.png`, …
+        // straight into it. See `overlay_files` for the naming. Creating it is all upside — a
+        // card with no art in it simply shows the built-in look.
+        let _ = std::fs::create_dir_all(root.join("Overlay"));
+        // The per-machine save folders are made here rather than left to the core: a core handed
+        // a save directory that does not exist writes nothing and says nothing, and the first
+        // save of the first GB game is exactly when nobody is looking.
+        for system in [System::Gba, System::Gb, System::Gbc] {
+            let _ = std::fs::create_dir_all(root.join("Saves").join(system.dir_name()));
+        }
+    }
 
 /// The card's own typeface, if it carries one. First by name out of `System/fonts`; then the
 /// single-file spelling, `System/font.ttf`, for a card that would rather not keep a folder for
@@ -85,6 +97,148 @@ pub fn panel_mask(root: &Path) -> Option<[[[u8; 3]; 3]; 3]> {
     }
 }
 
+/// One screen overlay on the card, and whether it asks for the reflection layer.
+pub struct OverlayFile {
+    pub path: PathBuf,
+    /// The file name carried the reflection marker (a trailing `x` on the stem), so the game's
+    /// mirrored blur is drawn wherever this overlay's own alpha leaves a hole. See
+    /// `overlay_files`.
+    pub reflect: bool,
+}
+
+/// Every screen-overlay PNG for one system, in rotation order.
+///
+/// Files live flat in `Overlay/`, named `<sys>.png` (the base) or `<sys>-NN.png` (a numbered
+/// variant), compared without case: for plain Game Boy, `gb.png`, `gb-01.png`, `gb-02.png`, …;
+/// for Game Boy Color, `gbc.png`, `gbc-01.png`, …. The base sorts first, then the numbered ones
+/// by their number, so the rotation runs base, 01, 02, …. An absent or empty `Overlay/` is no
+/// overlay at all — the built-in look stands — and a missing file is not an error worth a log
+/// line on a device with no console.
+///
+/// A trailing `x` on the stem — `gbx.png`, `gb-02x.png` — marks a **reflective** overlay: its
+/// transparent areas become the zones the screen reflection is drawn in (see
+/// `Compositor::set_reflection`). No marker, no reflection; the art works exactly as before.
+///
+/// `which` is the stem a file must start with, `"gb"` or `"gbc"`. Matching on the following
+/// `-` is what keeps `gbc-01.png` out of the plain GB set: it does not begin with `gb-`.
+pub fn overlay_files(root: &Path, which: &str) -> Vec<OverlayFile> {
+    let lower = which.to_ascii_lowercase();
+    let numbered = format!("{lower}-");
+    let Ok(dir) = std::fs::read_dir(root.join("Overlay")) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(i64, bool, String, PathBuf)> = Vec::new();
+    for entry in dir.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let name = name.to_ascii_lowercase();
+        let Some(stem) = name.strip_suffix(".png") else {
+            continue;
+        };
+        // A trailing `x` is the reflection marker; what remains is the plain name.
+        let (rest, reflect) = match stem.strip_suffix('x') {
+            Some(r) => (r, true),
+            None => (stem, false),
+        };
+        // Numbered from `00` upward: `gb-00.png` is as valid as `gb-01.png`, and both are as
+        // valid as the bare `gb.png`. (Requiring a number greater than zero silently dropped
+        // `gb-00x.png` — the name the user actually used — leaving the rotation with nothing.)
+        let rank = if rest == lower {
+            0
+        } else if let Some(digits) = rest.strip_prefix(&numbered) {
+            match digits.parse::<i64>() {
+                Ok(n) if n >= 0 => n,
+                _ => continue,
+            }
+        } else {
+            continue;
+        };
+        out.push((rank, reflect, name, path));
+    }
+    // A stable order whatever the filesystem hands back, so the rotation does not depend on
+    // directory order. Ties — `gb-01.png` beside `gb-01x.png` — sort by name, deterministically.
+    out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    out.into_iter()
+        .map(|(_, reflect, _, path)| OverlayFile { path, reflect })
+        .collect()
+}
+
+/// A named overlay: `Overlay/<sys>-<model>x.png`, the screen art drawn for one Game Boy model.
+///
+/// `overlay_files` cannot see these and that is on purpose — they are not entries in a rotation,
+/// they belong to the model whose art they are. The naming is `<sys>-<word>x.png`, matched
+/// case-insensitively the same way `overlay_files` lowercases, so a card written on Windows
+/// and a card written on the device agree about it.
+///
+/// `None` when the card has no art for that model, which is the normal case for a card that
+/// never drew any: the overlay set is then just whatever ordinary files are there.
+pub fn model_overlay(root: &Path, which: &str, model: &str) -> Option<PathBuf> {
+    let want = format!(
+        "{}-{}x.png",
+        which.to_ascii_lowercase(),
+        model.to_ascii_lowercase()
+    );
+    let dir = std::fs::read_dir(root.join("Overlay")).ok()?;
+    for entry in dir.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name.to_ascii_lowercase() == want {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Which overlay each system is showing, as indices into `overlay_files`. Kept in
+/// `System/overlay.txt` as two integers, GB then GBC. A missing or unreadable file reads as
+/// zero for both, and the caller clamps any index past the end of a system's list, so a card
+/// the user edits without rebooting cannot land out of range.
+pub fn overlay_indices(root: &Path) -> [usize; 2] {
+    let vals: Vec<usize> = std::fs::read_to_string(root.join("System/overlay.txt"))
+        .ok()
+        .map(|t| {
+            t.split_whitespace()
+                .filter_map(|v| v.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    [
+        vals.first().copied().unwrap_or(0),
+        vals.get(1).copied().unwrap_or(0),
+    ]
+}
+
+pub fn write_overlay_indices(root: &Path, indices: [usize; 2]) {
+    let _ = std::fs::write(
+        root.join("System/overlay.txt"),
+        format!("{} {}", indices[0], indices[1]),
+    );
+}
+
+/// Which machine's shelf is up, from `System/shelf.txt`. Absent or misspelt reads as GBA — the
+/// machine this device is a frontend for, and the natural default for a card that has not been
+/// told otherwise.
+pub fn shelf_system(root: &Path) -> System {
+    std::fs::read_to_string(root.join("System/shelf.txt"))
+        .ok()
+        .and_then(|t| t.split_whitespace().next().map(str::to_string))
+        .and_then(|w| match w.to_ascii_lowercase().as_str() {
+            "gb" => Some(System::Gb),
+            "gbc" => Some(System::Gbc),
+            "gba" => Some(System::Gba),
+            _ => None,
+        })
+        .unwrap_or(System::Gba)
+}
+
+pub fn write_shelf_system(root: &Path, system: System) {
+    let _ = std::fs::write(root.join("System/shelf.txt"), system.dir_name());
+}
+
 /// The colour-correction matrix, if the card carries one. Nine floats, three rows of three,
 /// row-major (output row, input column), 0.0-2.0: the matrix the game pass multiplies the
 /// picture by, in the spirit of a colour-saturation shader but applied as a single 3x3 multiply so
@@ -116,30 +270,83 @@ pub fn color_correction(root: &Path) -> Option<[[f32; 3]; 3]> {
     }
 }
 
-/// The two display modes, read from `System/display.txt` as two integers "mask_mode cc_mode",
-/// each clamped to its valid range: mask_mode to 0..=4 (OFF, LCD3X 50%, LCD3X 100%, SCANLINE 50%,
-/// SCANLINE 100%) and cc_mode to 0..=6 (FULLCOLOR, HALFCOLOR, NOCOLOR, DMG green, ice-blue, amber,
-/// pink backlight). Missing or unparsable means the shipped look: mask on (LCD3X, 2) and colour
-/// correction off (0). A single integer is read as the mask mode with colour off. Read once at
-/// boot and thereafter owned by the running app, which writes both back out with
-/// `write_display_modes` whenever SELECT+X or SELECT+Y cycles one of them.
-pub fn display_modes(root: &Path) -> (u8, u8) {
+/// The display modes, read from `System/display.txt` as "mask_mode cc_gba cc_gb cc_gbc":
+/// mask_mode 0..=4 (OFF, LCD3X 50%, LCD3X 100%, SCANLINE 50%, SCANLINE 100%) and one colour
+/// choice per machine — 0..=6 for the colour machines (FULLCOLOR, HALFCOLOR, NOCOLOR, DMG green,
+/// ice-blue, amber, pink backlight) and the whole palette table for the Game Boy, whose list is
+/// palettes rather than saturations. The ranges are the app's to clamp, since it is the app that
+/// owns the lists; this only reads non-negative integers.
+///
+/// The Game Boy's slot is deliberately **not** clamped here. Its list is hundreds of entries long
+/// and grew once already, and a cap written into the file reader would silently send a card back
+/// to an early palette the next time it did. Only the app knows how long that table is, so that
+/// is where the clamp lives (`DisplayFilter::new`).
+///
+/// Missing or unparsable means the shipped look: mask on (LCD3X, 2) and colour correction off.
+/// **Two integers is the older file** — "mask cc" from before the colour choice went per machine
+/// — and that one value is applied to all three, so a card written by the previous build keeps
+/// the look it was set to.
+pub fn display_modes(root: &Path) -> (u8, [u16; 3]) {
     let text = std::fs::read_to_string(root.join("System/display.txt")).ok();
-    let vals: Vec<u8> = text
+    let vals: Vec<u16> = text
         .map(|t| {
             t.split_whitespace()
-                .filter_map(|v| v.parse::<u8>().ok())
+                .filter_map(|v| v.parse::<u16>().ok())
                 .collect()
         })
         .unwrap_or_default();
-    let mask = vals.first().copied().unwrap_or(2).min(4);
-    let cc = vals.get(1).copied().unwrap_or(0).min(6);
+    let mask = vals.first().copied().unwrap_or(2).min(4) as u8;
+    let one = vals.get(1).copied().unwrap_or(0);
+    let cc = if vals.len() >= 4 {
+        [one, vals[2], vals[3]]
+    } else {
+        // The older two-integer file, or the one-integer one: whatever colour was chosen then
+        // was chosen for every machine, and that is still what it means.
+        [one, one, one]
+    };
     (mask, cc)
 }
 
-/// Persist the two display modes. Best effort: a read only card simply keeps the default.
-pub fn write_display_modes(root: &Path, mask: u8, cc: u8) {
-    let _ = std::fs::write(root.join("System/display.txt"), format!("{mask} {cc}"));
+/// Persist the display modes. Best effort: a read only card simply keeps the default.
+pub fn write_display_modes(root: &Path, mask: u8, cc: [u16; 3]) {
+    let _ = std::fs::write(
+        root.join("System/display.txt"),
+        format!("{mask} {} {} {}", cc[0], cc[1], cc[2]),
+    );
+}
+
+/// Where the Game Boy's palette list stood before the browser, and where those same looks are in
+/// `palettes::GB_PALETTES` now.
+///
+/// The old list was five house looks followed by ten PixelShift picks: 原生灰, DMG 初代绿,
+/// DMG 经典绿, GBP 暖白, GBL 青, then PS01/03/05/17/18/24/31/32/40/44. Three of those — the three
+/// model palettes — are no longer entries at all: they are the colour half of the screen art they
+/// were drawn with (`palettes::GB_MODELS`), reached by choosing the art rather than by picking a
+/// colour. A card left holding one of those indices was showing the model it had landed on; the
+/// number itself no longer names anything, so it falls back to 初代绿, the one house look that is
+/// still a palette in its own right.
+const GB_LEGACY: [u16; 15] = [0, 1, 1, 1, 1, 2, 4, 6, 18, 19, 25, 32, 33, 41, 45];
+
+/// Written once `migrate_palette` has run, so it runs exactly once per card.
+pub const PALETTE_MARKER: &str = "System/palette.v2";
+
+/// Bring a card written before the palette browser onto the table it has now, so the Game Boy look
+/// it was set to is the look it still shows.
+///
+/// Keyed on a marker file rather than on the value, because the two tables overlap across 0..=14
+/// and no reading of a single number can say which table wrote it. Best effort throughout: a card
+/// that cannot be written to simply keeps the default, exactly as it would have anyway.
+pub fn migrate_palette(root: &Path) {
+    let marker = root.join(PALETTE_MARKER);
+    if marker.exists() {
+        return;
+    }
+    let (mask, mut cc) = display_modes(root);
+    if let Some(mapped) = GB_LEGACY.get(cc[1] as usize) {
+        cc[1] = *mapped;
+    }
+    write_display_modes(root, mask, cc);
+    let _ = std::fs::write(&marker, "palette.v2\n");
 }
 
 /// The audio profile, read from `System/audio.txt`: `stable`, `balanced` or `strict`.
@@ -300,6 +507,10 @@ pub fn bios_dir(root: &Path) -> PathBuf {
     root.join("BIOS")
 }
 
-pub fn saves_dir(root: &Path) -> PathBuf {
-    root.join("Saves")
+/// The battery saves, under the machine's own folder. A GB `Tetris` and a GBA `Tetris` share a
+/// stem, so on a flat card they also share one `.sav`; sorting by machine is what keeps each
+/// game's bytes its own. `bios_dir` is the one folder that does **not** sort: a bios is the
+/// machine, not the game, so it stays shared.
+pub fn saves_dir(root: &Path, system: System) -> PathBuf {
+    root.join("Saves").join(system.dir_name())
 }

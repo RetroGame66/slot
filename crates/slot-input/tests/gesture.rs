@@ -1,7 +1,7 @@
 use slot_input::RawEvent::{Down, Up};
 use slot_input::{
-    Action::*, Btn, Btn::*, Gestures, RawEvent, MENU_HOLD_MS, POWER_HOLD_MS, SELECT_CHORD_MS,
-    SELECT_TAP_MS, VOLUME_REPEAT_DELAY_MS, VOLUME_REPEAT_MS,
+    Action::*, Btn, Btn::*, Gestures, RawEvent, COLOR_HOLD_MS, MENU_HOLD_MS, POWER_HOLD_MS,
+    SELECT_CHORD_MS, SELECT_TAP_MS, VOLUME_REPEAT_DELAY_MS, VOLUME_REPEAT_MS,
 };
 
 #[test]
@@ -432,4 +432,165 @@ fn the_menu_button_still_works_after_a_chord() {
         vec![OpenAbout],
         "the chord left the menu button dead"
     );
+}
+
+/// SELECT+Y is the one chord that is two gestures on one press: tapped it walks the palette
+/// page, held it opens the palette browser. Everything below is that one sentence.
+///
+/// The press is therefore **not** spent on the way down — every other chord is, and the tests
+/// above are full of `vec![something]` on the `Down`. Here the down emits nothing at all, and
+/// which of the two it was is decided by the threshold in `tick` or, failing that, by the
+/// release. Losing that distinction is how one key becomes two that fire together: a hold that
+/// also walks leaves the user on a different palette from the one they were aiming at when the
+/// panel opens.
+const Y_HOLD: u64 = COLOR_HOLD_MS;
+
+#[test]
+fn select_and_y_held_opens_the_palette_browser() {
+    let mut g = Gestures::new();
+    assert!(
+        g.feed(Down(Select), 0).is_empty(),
+        "SELECT is deferred behind the chord window anyway"
+    );
+    assert!(
+        g.feed(Down(Y), 10).is_empty(),
+        "the chord's press must not be spent: the two halves are not distinguishable yet"
+    );
+    assert!(g.tick(10 + Y_HOLD - 1).is_empty(), "not yet");
+    assert_eq!(
+        g.tick(10 + Y_HOLD),
+        vec![ColorHold],
+        "the hold is delivered at the threshold, while the key is still down"
+    );
+    // And the release owes nothing: the panel it opened is up, and B is what puts it away.
+    assert!(g.feed(Up(Y), 10 + Y_HOLD + 200).is_empty());
+    assert!(g.feed(Up(Select), 10 + Y_HOLD + 210).is_empty());
+}
+
+#[test]
+fn a_select_y_tap_walks_the_palette_page() {
+    let mut g = Gestures::new();
+    g.feed(Down(Select), 0);
+    assert!(g.feed(Down(Y), 10).is_empty());
+    assert_eq!(
+        g.feed(Up(Y), 60),
+        vec![ColorCycle],
+        "a tap is the walk, delivered on the release because the press could still have grown"
+    );
+    // The threshold must not reach back for a press that is already over.
+    assert!(g.tick(10 + Y_HOLD * 4).is_empty());
+    assert!(g.feed(Up(Select), 70).is_empty());
+}
+
+#[test]
+fn the_two_halves_of_select_y_are_mutually_exclusive() {
+    // The hold, watched all the way to the end of the press: a walk would show up here.
+    let mut g = Gestures::new();
+    let mut out = Vec::new();
+    out.extend(g.feed(Down(Select), 0));
+    out.extend(g.feed(Down(Y), 10));
+    out.extend(g.tick(10 + Y_HOLD));
+    out.extend(g.tick(10 + Y_HOLD * 10));
+    out.extend(g.feed(Up(Y), 10 + Y_HOLD * 10 + 10));
+    out.extend(g.feed(Up(Select), 10 + Y_HOLD * 10 + 20));
+    assert_eq!(out, vec![ColorHold], "the hold also walked the page");
+}
+
+#[test]
+fn the_browser_opens_once_per_press_not_once_per_tick() {
+    let mut g = Gestures::new();
+    g.feed(Down(Select), 0);
+    g.feed(Down(Y), 10);
+    let mut holds = 0;
+    for t in 10..10 + Y_HOLD * 5 {
+        holds += g.tick(t).iter().filter(|a| **a == ColorHold).count();
+    }
+    assert_eq!(holds, 1, "the threshold is an edge, not a level");
+}
+
+#[test]
+fn a_select_y_hold_never_reaches_the_game() {
+    let mut g = Gestures::new();
+    g.feed(Down(Select), 0);
+    g.feed(Down(Y), 10);
+    g.tick(10 + Y_HOLD);
+    let mut out = g.feed(Up(Y), 10 + Y_HOLD + 100);
+    out.extend(g.feed(Up(Select), 10 + Y_HOLD + 110));
+    // SELECT's own press is owed to the game only when it was never chorded; the `GbaUp` for it
+    // is emitted by `select_up` on the release, and the down was swallowed, so nothing here.
+    assert!(out.is_empty(), "a chorded press leaked to the game: {out:?}");
+}
+
+#[test]
+fn a_second_press_arms_its_own_hold() {
+    let mut g = Gestures::new();
+    g.feed(Down(Select), 0);
+    g.feed(Down(Y), 10);
+    assert_eq!(g.tick(10 + Y_HOLD), vec![ColorHold]);
+    g.feed(Up(Y), 10 + Y_HOLD + 50);
+    g.feed(Up(Select), 10 + Y_HOLD + 60);
+    // The next press is a fresh gesture, and this one is a tap: the fired flag from the last
+    // press must not turn it into a second hold.
+    g.feed(Down(Select), 1000);
+    g.feed(Down(Y), 1010);
+    assert!(g.tick(1010 + Y_HOLD - 1).is_empty(), "the flag was left set");
+    assert_eq!(g.feed(Up(Y), 1010 + Y_HOLD - 1), vec![ColorCycle]);
+}
+
+#[test]
+fn y_released_just_short_of_the_threshold_walks() {
+    let mut g = Gestures::new();
+    g.feed(Down(Select), 0);
+    g.feed(Down(Y), 10);
+    assert!(g.tick(10 + Y_HOLD - 1).is_empty());
+    assert_eq!(g.feed(Up(Y), 10 + Y_HOLD - 1), vec![ColorCycle]);
+}
+
+#[test]
+fn a_select_released_under_a_held_y_owes_nothing() {
+    // SELECT let go first, with Y still down and the panel already open. The chord's own
+    // release handling must survive SELECT going away underneath it.
+    let mut g = Gestures::new();
+    g.feed(Down(Select), 0);
+    g.feed(Down(Y), 10);
+    assert_eq!(g.tick(10 + Y_HOLD), vec![ColorHold]);
+    assert!(g.feed(Up(Select), 10 + Y_HOLD + 20).is_empty());
+    assert!(g.feed(Up(Y), 10 + Y_HOLD + 400).is_empty(), "the hold also walked");
+}
+
+/// And with no SELECT down, Y is the game's again — the chord does not take the button.
+#[test]
+fn y_without_select_is_still_the_games_y() {
+    let mut g = Gestures::new();
+    assert_eq!(g.feed(Down(Y), 0), vec![GbaDown(Y)]);
+    assert_eq!(g.feed(Up(Y), 40), vec![GbaUp(Y)]);
+    // ...and holding it is not a hold, because there is no chord to be the hold half of.
+    assert!(g.tick(0 + Y_HOLD * 3).is_empty());
+    assert_eq!(g.feed(Down(Y), 2000), vec![GbaDown(Y)]);
+    assert_eq!(g.feed(Up(Y), 2000 + Y_HOLD * 3), vec![GbaUp(Y)]);
+}
+
+/// The chord leaves nothing behind for the next press to find.
+///
+/// The menu button needed exactly this test and for the same reason: the deferred press is the
+/// one place a chord keeps state across two edges, and state that is not cleared on the way out
+/// changes the meaning of a press that comes much later.
+#[test]
+fn the_y_button_still_works_after_a_chord() {
+    for (label, hold) in [("held", true), ("tapped", false)] {
+        let mut g = Gestures::new();
+        g.feed(Down(Select), 0);
+        g.feed(Down(Y), 10);
+        if hold {
+            g.tick(10 + Y_HOLD);
+        }
+        g.feed(Up(Y), 10 + Y_HOLD + 50);
+        g.feed(Up(Select), 10 + Y_HOLD + 60);
+        assert_eq!(
+            g.feed(Down(Y), 5000),
+            vec![GbaDown(Y)],
+            "a bare Y after the {label} chord was not the game's"
+        );
+        assert_eq!(g.feed(Up(Y), 5040), vec![GbaUp(Y)]);
+    }
 }

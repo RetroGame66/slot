@@ -5,6 +5,11 @@ use crate::{Btn, Millis, RawEvent};
 /// and 120 ms was not enough to land the second key of a chord.
 pub const SELECT_CHORD_MS: Millis = 600;
 
+/// How long the second key of the SELECT+Y chord is held before it stops being a tap and becomes
+/// the palette browser. Long enough that walking the ring never opens a panel by accident, short
+/// enough that a user who means it does not have to wait for it.
+pub const COLOR_HOLD_MS: Millis = 550;
+
 /// How long a delivered tap stays down. Press and release in one batch net out to nothing,
 /// because the mask is set and cleared before the core reads it.
 pub const SELECT_TAP_MS: Millis = 50;
@@ -75,8 +80,14 @@ pub enum Action {
     LidOpen,
     /// Cycle the in-game panel mask (OFF / LCD3X 50% / LCD3X 100% / SCANLINE 50% / SCANLINE 100%) on SELECT+X.
     MaskCycle,
-    /// Cycle the in-game colour correction (FULLCOLOR / HALFCOLOR / NOCOLOR / DMG green / ice-blue / amber / pink) on SELECT+Y.
+    /// Cycle the in-game colour correction (FULLCOLOR / HALFCOLOR / NOCOLOR / DMG green / ice-blue / amber / pink) on SELECT+Y,
+    /// and the Game Boy's palette from the same key — a tap walks the page of palettes in hand.
     ColorCycle,
+    /// The **hold** half of that same key, on the same press: SELECT+Y held opens the palette
+    /// browser. Delivered at the threshold, while the key is still down, exactly as `PowerHold`
+    /// is — the browser is on screen for as long as the user is holding it, and it is B (or the
+    /// key's own release, which has by then been spent) that puts it away.
+    ColorHold,
     /// Toggle the cart's cheat list on SELECT+A. The list lives on the card, so this only flips
     /// it on or off; what is in it is edited on a PC.
     CheatToggle,
@@ -87,6 +98,10 @@ pub enum Action {
     AudioProfileNext,
     /// The same the other way, on SELECT+VOL-.
     AudioProfilePrev,
+    /// Step to the next Game Boy screen overlay — the `Overlay/gb-NN.png` (or `gbc-NN.png`)
+    /// set for the cart's system. Emitted on every screen like the other chords; the app lands
+    /// it where there is an overlay to rotate (the cart in the slot, or the shelf's highlight).
+    OverlayNext,
     /// Which way round the frontend is printed, on SELECT+START.
     ///
     /// START rather than B, L2 or R2, the other three the chord table leaves free. START is
@@ -143,6 +158,11 @@ pub struct Gestures {
     ff_latching_press: bool,
     r2_last_release: Option<Millis>,
     rewinding: bool,
+    /// SELECT+Y is the one chord that is two gestures on one press, so it is the one chord whose
+    /// press is not spent on the way down: the Y is remembered here and the release decides. The
+    /// hold is delivered from `tick`, while the key is still down, exactly as the POWER hold is.
+    y_at: Option<Millis>,
+    y_hold_fired: bool,
 }
 
 /// Whether a held key owes a step at `now`. The wait before the first is longer than the gap
@@ -200,6 +220,14 @@ impl Gestures {
                 out.push(Action::PowerHold);
             }
         }
+        // The second half of SELECT+Y. Nothing is emitted on the way down, so this is the only
+        // thing that can turn that press into a hold; a press that ends first is the walk instead.
+        if let Some(d) = self.y_at {
+            if !self.y_hold_fired && now.saturating_sub(d) >= COLOR_HOLD_MS {
+                self.y_hold_fired = true;
+                out.push(Action::ColorHold);
+            }
+        }
         // Held volume runs the level. Not while the pair has fired: that press was a mute,
         // and ramping under it would move the level the mute just remembered.
         if !self.mute_fired {
@@ -244,13 +272,36 @@ impl Gestures {
                 }
                 self.volume_press(b, now)
             }
-            Btn::L2 => self.rewind_start(),
-            Btn::R2 => self.ff_down(now),
+            // L2/R2 are rewind and fast forward on their own, but a held SELECT has to be able
+            // to turn them into a chord — the same check the volume keys above make, and for
+            // the same reason. Without it this arm swallowed the press before it could reach
+            // the `chord` path below, so SELECT+L2/R2 fired nothing at all.
+            Btn::L2 | Btn::R2 => {
+                let chording = matches!(self.select, Select::Pending(_) | Select::Consumed);
+                if let (true, Some((bit, action))) = (chording, chord(b)) {
+                    self.select = Select::Consumed;
+                    self.chord_held |= bit;
+                    return vec![action];
+                }
+                match b {
+                    Btn::L2 => self.rewind_start(),
+                    _ => self.ff_down(now),
+                }
+            }
             _ => {
                 let chording = matches!(self.select, Select::Pending(_) | Select::Consumed);
                 if let (true, Some((bit, action))) = (chording, chord(b)) {
                     self.select = Select::Consumed;
                     self.chord_held |= bit;
+                    // SELECT+Y alone is not spent here. It is two gestures on one press — tapped
+                    // it walks the palette page, held it opens the palette browser — and which of
+                    // the two it was is not knowable yet. `tick` delivers the hold at the
+                    // threshold; `up` delivers the tap when no hold got there first.
+                    if b == Btn::Y {
+                        self.y_at = Some(now);
+                        self.y_hold_fired = false;
+                        return Vec::new();
+                    }
                     return vec![action];
                 }
                 vec![Action::GbaDown(b)]
@@ -275,9 +326,38 @@ impl Gestures {
                 }
                 self.volume_release(b)
             }
-            Btn::L2 => self.rewind_stop(),
-            Btn::R2 => self.ff_up(now),
+            Btn::L2 | Btn::R2 => {
+                // Swallow the release of a chorded shoulder, so it neither stops a rewind that
+                // never started nor hands the core an up edge it never saw go down.
+                if let Some((bit, _)) = chord(b) {
+                    if self.chord_held & bit != 0 {
+                        self.chord_held &= !bit;
+                        return Vec::new();
+                    }
+                }
+                match b {
+                    Btn::L2 => self.rewind_stop(),
+                    _ => self.ff_up(now),
+                }
+            }
             _ => {
+                // The deferred half of SELECT+Y, and the only place a tap of it becomes a walk.
+                // Guarded on the press having been ours: a bare Y is the core's and has to keep
+                // its own release, and a bare Y on the shelf is what clears the machine hold.
+                if b == Btn::Y && self.y_at.is_some() {
+                    if let Some((bit, _)) = chord(b) {
+                        self.chord_held &= !bit;
+                    }
+                    self.y_at = None;
+                    let held = std::mem::take(&mut self.y_hold_fired);
+                    // A hold has already been delivered, so the release owes nothing — the panel
+                    // it opened is still on screen and B is what puts it away.
+                    return if held {
+                        Vec::new()
+                    } else {
+                        vec![Action::ColorCycle]
+                    };
+                }
                 if let Some((bit, _)) = chord(b) {
                     if self.chord_held & bit != 0 {
                         self.chord_held &= !bit;
@@ -477,9 +557,13 @@ fn chord(b: Btn) -> Option<(u16, Action)> {
         Btn::VolUp => (512, Action::AudioProfileNext),
         Btn::VolDown => (1024, Action::AudioProfilePrev),
         // The three the table left over. B is the one a hand reaches for by accident, and START
-        // is the one the shelf stopped using when the letter-view toggle went; L2 and R2 stay
-        // free for whatever needs a shoulder next.
+        // is the one the shelf stopped using when the letter-view toggle went; L2 and R2 are
+        // the shoulders.
         Btn::Start => (2048, Action::ModeToggle),
+        // SELECT+R2 rotates the screen overlay, in game only (the app lands it there). The
+        // shelf cycle used to sit on SELECT+B and SELECT+L2 as a placeholder; it is a hold of Y
+        // on the shelf now, so those two chords are gone and B/L2 are free.
+        Btn::R2 => (16384, Action::OverlayNext),
         _ => return None,
     })
 }

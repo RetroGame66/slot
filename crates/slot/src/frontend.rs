@@ -10,15 +10,17 @@ use slot_store::format_stamp;
 use slot_ui::lang;
 use slot_ui::{
     arrows_hint_face, cart_face, cart_placeholder, cart_shadow, cheat_row_face, chip_face,
+    dialog_line_face, size_for,
     chip_shadow_face, clean_label, clock_face, hhmm, hint_face, icon_face, letters, menu_face,
     photo_face, set_clock_hint_face, shelf_title_face, shortcut_hint_face, shortcut_row_face,
     socket_face, sticker_face, title_face, toast_face, wallpaper_face, word_face, Icon,
-    PowerChoice, StickerFields, Toast, ALERT_PX, BOLT_PX, HUD_ICON_PX, LEGEND, SHORTCUT_ROWS,
+    PowerChoice, StickerFields, Toast, ALERT_PX, BOLT_PX, HUD_ICON_PX, LEGEND, PALETTE_NAME_PX,
+    SHORTCUT_ROWS,
 };
 
 use crate::app::{App, GameRow, LinkRow, Phase};
 use crate::build_info::Build;
-use crate::face_builder::{ring_distance, shelf_window, FaceBuilder, ShelfFaceFiller};
+use crate::face_builder::{shelf_window, FaceBuilder, ShelfFaceFiller};
 use crate::link_start::{LinkFail, LinkStep};
 use crate::root;
 use crate::session::Session;
@@ -72,6 +74,9 @@ pub struct Frontend {
     shelf_missing: Vec<usize>,
     /// The caret position the resident window was last built for.
     resident_at: Option<usize>,
+    /// Whether the boot log has the row's own account of itself yet: which cart is in each
+    /// slot, and which of those is holding a face rather than the stand-in.
+    row_logged: bool,
     /// The cart last asked for.
     core_asked: Option<String>,
     /// The open cart and its lid, and which cart they were built for.
@@ -83,6 +88,11 @@ pub struct Frontend {
     switcher: Switcher,
     clocks: Clocks,
     about: AboutFace,
+    /// The palette browser's one line of type and the string it was built from. One name at a
+    /// time is what makes a table of hundreds affordable to browse: fifteen of them would be
+    /// fifteen rasterisations per page turn.
+    palette_tex: Option<TexId>,
+    palette_named: Option<String>,
     /// Whether the first frame's uptime has been written to `boot.log`. One line, once, so the
     /// log says how long the device took to reach the shelf and which base it did it on.
     frame_logged: bool,
@@ -140,6 +150,7 @@ impl Frontend {
             shelf_faces: ShelfFaceFiller::spawn(),
             shelf_missing: Vec::new(),
             resident_at: None,
+            row_logged: false,
             core_asked: None,
             core_board_tex: None,
             core_lid_tex: None,
@@ -148,6 +159,8 @@ impl Frontend {
             switcher: Switcher::default(),
             clocks: Clocks::default(),
             about: AboutFace::default(),
+            palette_tex: None,
+            palette_named: None,
             frame_logged: false,
         }
     }
@@ -200,12 +213,21 @@ impl Frontend {
                 missing.iter().collect::<String>()
             ));
         }
-        let carts_at = Instant::now();
-        // Only the carts the shelf can actually draw. Everything else is rasterised behind
-        // the caret by `shelf_faces` while the user reads the row: see `ShelfFaceFiller`.
+                let carts_at = Instant::now();
+        // The carts the row is actually drawing — not a contiguous run of library indices around
+        // the caret. On a machine shelf those two sets are not the same one: this card files its
+        // three Game Boy carts at 27, 127 and 637 among nine hundred Advance ones, so a window
+        // that walks the library builds nine hundred Advance carts and misses the three on
+        // screen, and the row comes up as the blank stand-in. See `Shelf::draw_window`.
         let index = self.session.app().shelf_index();
-        let window = shelf_window(index, self.session.app().carts().len());
-        let mut faces: Vec<Option<TexId>> = vec![None; self.session.app().carts().len()];
+        let count = self.session.app().carts().len();
+        let window = self.session.app().shelf_draw_window();
+        let window = if window.is_empty() {
+            shelf_window(index, count)
+        } else {
+            window
+        };
+        let mut faces: Vec<Option<TexId>> = vec![None; count];
         for &i in &window {
             let f = cart_face(&self.session.app().carts()[i]);
             faces[i] = Some(compositor.create_texture(f.w, f.h, &f.rgba));
@@ -214,13 +236,11 @@ impl Frontend {
         self.session.boot_note(&format!(
             "cart faces ({} built of {}) {} ms",
             window.len(),
-            self.session.app().carts().len(),
+            count,
             carts_at.elapsed().as_millis()
         ));
         self.session.app_mut().set_faces(faces);
-        self.shelf_missing = (0..self.session.app().carts().len())
-            .filter(|i| !window.contains(i))
-            .collect();
+        self.shelf_missing = (0..count).filter(|i| !window.contains(&i)).collect();
         // The furniture, and the one group that has to be built again when the mode moves:
         // see `upload_fixed`.
         self.upload_fixed(compositor);
@@ -240,30 +260,22 @@ impl Frontend {
         self.upload_faces_note(faces_at);
     }
 
-    /// Every face on the device that is not a cart's and not the wallpaper: one texture per
-    /// fixed string or glyph, all of it ink burned in.
-    ///
-    /// Split out of `upload_faces` so a mode change can run it alone. The font is read once off
-    /// the card and the cart faces scale with the card; neither of those has a palette in it —
-    /// a label is a picture — so neither belongs on the path that follows the mode, and asking
-    /// them to run again would spend a second and a half of boot budget re-deriving nine hundred
-    /// labels in colours they never had.
-    ///
-    /// Everything here *can* change, but only when the mode does, which is a press the user made
-    /// and knows about. That is the whole trade: the type is a texture, so the ink cannot move
-    /// under it, so the texture has to be rebuilt. The old textures are leaked rather than freed
-    /// — the compositor has no `destroy_texture` — which is a few hundred kilobytes a switch on
-    /// a device with sixteen megabytes of heap. Worth saying out loud rather than leaving for
-    /// someone to find in a memory graph.
     /// How tall the star a starred cart wears is drawn. Larger than the indicator: it is read
     /// at the size of the cart it sits above, where the indicator is a lamp in a corner.
-    const FAV_STAR_PX: f32 = 30.0;
+    const FAV_STAR_PX: f32 = 36.0;
     /// How tall the shelf's indicator is drawn.
-    const FAV_IND_PX: f32 = 24.0;
-    /// The star's own colour, and the only thing on the shelf that is neither the case's ink
-    /// nor the palette's. A favourite is a fact about the cart rather than about which mode the
-    /// frontend is in, so it stays the same colour in both.
+    const FAV_IND_PX: f32 = 36.0;
+    /// The dark theme's star, and the only thing on the shelf that is neither the case's ink nor
+    /// the palette's. A favourite is a fact about the cart rather than about which mode the
+    /// frontend is in, so it stays the same colour in both — this one is what it is in the dark,
+    /// where a star is drawn and not a heart.
     const FAV_INK: [u8; 3] = [0xff, 0xc4, 0x1e];
+    /// The light theme draws a heart instead, because that is what the light cart's own sticker
+    /// carries in its corner and the indicator has to match it.
+    const HEART_INK: [u8; 3] = [0xf4, 0x79, 0x83];
+    /// The same heart unlit: solid, and the case's grey rather than an outline, which on a pale
+    /// shelf read as a hole rather than as a shape.
+    const HEART_INK_QUIET: [u8; 3] = [0x3c, 0x3c, 0x3c];
 
     fn upload_fixed(&mut self, compositor: &mut Compositor) {
         let icons = Icon::ALL
@@ -277,21 +289,100 @@ impl Frontend {
         // The favourites: the star a starred cart wears, and the shelf's indicator, unlit and
         // lit. Uploaded here with the rest of the fixed furniture, because none of the three
         // ever changes — the indicator lights by drawing the other face, not by re-rasterising.
-        let star = icon_face(Icon::Star, Self::FAV_STAR_PX, Self::FAV_INK);
-        let star = (
-            compositor.create_texture(star.w, star.h, &star.rgba),
-            star.w,
-            star.h,
-        );
-        let off = icon_face(Icon::StarOutline, Self::FAV_IND_PX, slot_ui::palette::ink());
-        let off = (
-            compositor.create_texture(off.w, off.h, &off.rgba),
-            off.w,
-            off.h,
-        );
-        let on = icon_face(Icon::Star, Self::FAV_IND_PX, Self::FAV_INK);
-        let on = (compositor.create_texture(on.w, on.h, &on.rgba), on.w, on.h);
+        //
+        // Two shapes rather than one, and that is what the mode decides. The dark shelf draws a
+        // star, which is what the cart art's own corner carries there; the light shelf draws the
+        // heart the light cart art has, so a light-mode cart and its indicator are the same mark.
+        // `rebake` runs this again when the mode moves, which is where "fixed" ends.
+        let (star, off, on) = match slot_ui::palette::mode() {
+            slot_ui::palette::Mode::Dark => {
+                let star = icon_face(Icon::Star, Self::FAV_STAR_PX, Self::FAV_INK);
+                let star = (
+                    compositor.create_texture(star.w, star.h, &star.rgba),
+                    star.w,
+                    star.h,
+                );
+                let off = icon_face(Icon::StarOutline, Self::FAV_IND_PX, Self::FAV_INK);
+                let off = (
+                    compositor.create_texture(off.w, off.h, &off.rgba),
+                    off.w,
+                    off.h,
+                );
+                let on = icon_face(Icon::Star, Self::FAV_IND_PX, Self::FAV_INK);
+                let on = (compositor.create_texture(on.w, on.h, &on.rgba), on.w, on.h);
+                (star, off, on)
+            }
+            slot_ui::palette::Mode::Light => {
+                let star = icon_face(Icon::Heart, Self::FAV_STAR_PX, Self::HEART_INK);
+                let star = (
+                    compositor.create_texture(star.w, star.h, &star.rgba),
+                    star.w,
+                    star.h,
+                );
+                // Solid grey, not an outline: the cart's own corner heart is solid, and an
+                // outline beside it read as a different, emptier mark.
+                let off = icon_face(Icon::Heart, Self::FAV_IND_PX, Self::HEART_INK_QUIET);
+                let off = (
+                    compositor.create_texture(off.w, off.h, &off.rgba),
+                    off.w,
+                    off.h,
+                );
+                let on = icon_face(Icon::Heart, Self::FAV_IND_PX, Self::HEART_INK);
+                let on = (compositor.create_texture(on.w, on.h, &on.rgba), on.w, on.h);
+                (star, off, on)
+            }
+        };
         self.session.app_mut().set_fav_faces(star, off, on);
+        // The three machine logos for the shelf indicator, bottom-left, in `GB, GBC, GBA`
+        // order. Text for now — the user will bake real machine logos — uploaded here with the
+        // rest of the fixed furniture so nothing is rasterised mid-swap.
+        // A card that supplies its own badge is used as it is; a card that does not gets the
+        // built-in word. Either way the face comes with its size, because the app fits it into
+        // the bar's box rather than drawing it at the size it happens to be.
+        let carts_dir = self.session.app().root().map(|r| r.join("System/Carts"));
+        let shelf_ind: Vec<(TexId, u32, u32)> = [
+            ("GB", "type_gb.png"),
+            ("GBC", "type_gbc.png"),
+            ("GBA", "type_gba.png"),
+        ]
+        .iter()
+        .map(|(word, file)| {
+            match carts_dir
+                .as_deref()
+                .and_then(|d| slot_ui::decode_rgba(&d.join(file)))
+            {
+                Some((rgba, w, h)) => (compositor.create_texture(w, h, &rgba), w, h),
+                None => {
+                    let f = word_face(word);
+                    (compositor.create_texture(f.w, f.h, &f.rgba), f.w, f.h)
+                }
+            }
+        })
+        .collect();
+        self.session.app_mut().set_shelf_ind_faces(shelf_ind);
+        // The light theme's three, drawn separately by the card rather than tinted from the dark
+        // ones. A card without them falls back to the built-in word as well, so a switch to
+        // light mode on such a card changes nothing but the rest of the palette.
+        let shelf_ind_light: Vec<(TexId, u32, u32)> = [
+            ("GB", "type_gb_light.png"),
+            ("GBC", "type_gbc_light.png"),
+            ("GBA", "type_gba_light.png"),
+        ]
+        .iter()
+        .map(|(word, file)| {
+            match carts_dir
+                .as_deref()
+                .and_then(|d| slot_ui::decode_rgba(&d.join(file)))
+            {
+                Some((rgba, w, h)) => (compositor.create_texture(w, h, &rgba), w, h),
+                None => {
+                    let f = word_face(word);
+                    (compositor.create_texture(f.w, f.h, &f.rgba), f.w, f.h)
+                }
+            }
+        })
+        .collect();
+        self.session.app_mut().set_shelf_ind_light(shelf_ind_light);
         // Its own upload rather than one of the HUD's: it is drawn on a cart, at its own
         // size, and in a warning colour the level glyphs have no business borrowing.
         let alert = icon_face(Icon::Alert, ALERT_PX, ALERT_INK);
@@ -387,15 +478,23 @@ impl Frontend {
         self.session.app_mut().set_cheat_empty_face(empty);
         let legend = legend_faces(compositor, &LEGEND);
         self.session.app_mut().set_legend_faces(legend);
-        let shadow = cart_shadow();
+        // Built for the shelf the device came up on. A shelf switch later in the session changes
+        // the row's geometry under them, which `set_shelf_geometry` re-cuts.
+        let sys = self.session.app().shelf_system();
+        let size = size_for(sys);
+        let shadow = cart_shadow(size, sys);
         let id = compositor.create_texture(shadow.w, shadow.h, &shadow.rgba);
-        self.session.app_mut().set_cart_shadow(id);
+        if let Some(old) = self.session.app_mut().set_cart_shadow(id) {
+            compositor.release_texture(old);
+        }
         // The blank cart every not-yet-built face is drawn as. A jump across the alphabet
         // crosses carts no filler will ever reach in time, and this is what slides past in
         // their place — a cartridge, rather than the label's colour as a bar of paint.
-        let blank = cart_placeholder();
+        let blank = cart_placeholder(size, sys);
         let blank = compositor.create_texture(blank.w, blank.h, &blank.rgba);
-        self.session.app_mut().set_cart_placeholder(blank);
+        if let Some(old) = self.session.app_mut().set_cart_placeholder(blank) {
+            compositor.release_texture(old);
+        }
         // `draw_gauge` now draws the bolt beside the capsule, on the housing, in its own
         // reserved slot rather than over the fill. The housing tint was only ever needed to
         // hide the bolt inside the fill it sat on; out here it sits where every other HUD
@@ -458,6 +557,15 @@ impl Frontend {
     /// colour off the game's code: nothing about a cartridge is printed in the palette, which is
     /// the same reason `upload_faces` can put nine hundred of them outside the boot's critical
     /// path.
+
+    /// Rasterise the fixed furniture again, in whatever mode is now set, and rebuild the cart
+    /// faces the row is drawing.
+    ///
+    /// The whole reason a theme change does not need a restart: the type is a texture, so the
+    /// ink cannot move under it, so the textures have to be made again. What it deliberately
+    /// does *not* touch is the font and the labels — a label is a picture and has no palette in
+    /// it, and asking for nine hundred of them again would be a second of boot budget spent on
+    /// colours they never had.
     fn rebake(&mut self, compositor: &mut Compositor) {
         let at = Instant::now();
         self.upload_fixed(compositor);
@@ -467,8 +575,98 @@ impl Frontend {
         self.switcher = Switcher::default();
         self.clocks = Clocks::default();
         self.about = AboutFace::default();
+        // Cart faces: the visible window is rebuilt in place; everything outside it is released
+        // and cleared so the resident pump rebuilds it on demand. `resident_at = None` forces
+        // `sync_resident_faces` to rescan on the next frame and re-queue the dropped faces.
+        let count = self.session.app().carts().len();
+        let index = self.session.app().shelf_index();
+        let window = self.session.app().shelf_draw_window();
+        let window = if window.is_empty() {
+            shelf_window(index, count)
+        } else {
+            window
+        };
+        for i in 0..count {
+            if window.contains(&i) {
+                let f = cart_face(&self.session.app().carts()[i]);
+                let tex = compositor.create_texture(f.w, f.h, &f.rgba);
+                self.session.app_mut().set_face(i, tex);
+            } else if let Some(tex) = self.session.app().face_of(i) {
+                compositor.release_texture(tex);
+                self.session.app_mut().clear_face(i);
+            }
+        }
+        self.resident_at = None;
         self.session.boot_note(&format!(
             "reprinted for the mode in {} ms",
+            at.elapsed().as_millis()
+        ));
+    }
+
+    /// A machine shelf swapped in mid-session: re-cut the row's frame for the machine that is up
+    /// and build the carts the new row draws.
+    ///
+    /// Three things were minted for the shelf the device came up on and are wrong the moment
+    /// another one is swapped in: the shadow under a dimmed cart, the blank cart a not-yet-built
+    /// face stands in as (an Advance cart is landscape and a Game Boy cart portrait, so the
+    /// stand-in is visibly the wrong object), and the set of faces worth having. All three are
+    /// rebuilt here, in the one place with a compositor.
+    ///
+    /// The faces are the reason this exists rather than being cosmetic. A swap changes the view
+    /// to a *subset* of the library, and the filler orders its work by ring distance in the
+    /// library — so the carts on screen are not necessarily the ones it would reach first, and
+    /// until it gets there the row shows the stand-in. Building the seven the row draws, here,
+    /// means the shelf is right on the frame it appears rather than at some point after.
+    fn set_shelf_geometry(&mut self, compositor: &mut Compositor) {
+        let at = Instant::now();
+        let sys = self.session.app().shelf_system();
+        let size = size_for(sys);
+        let shadow = cart_shadow(size, sys);
+        let id = compositor.create_texture(shadow.w, shadow.h, &shadow.rgba);
+        if let Some(old) = self.session.app_mut().set_cart_shadow(id) {
+            compositor.release_texture(old);
+        }
+        let blank = cart_placeholder(size, sys);
+        let blank = compositor.create_texture(blank.w, blank.h, &blank.rgba);
+        if let Some(old) = self.session.app_mut().set_cart_placeholder(blank) {
+            compositor.release_texture(old);
+        }
+        // The faces need nothing here, and that is the point of measuring in the shelf rather
+        // than in the library. `Shelf::shelf_distance` counts from the front of *every*
+        // machine's shelf as well as from the live caret, so the row this swap is about to show
+        // has been resident the whole time. Measuring in the library evicted it as "too far
+        // away", and rebuilding it here cost 129-179 ms on the render thread, in the middle of
+        // a 0.68 s swap animation. Nothing to build now, so nothing to stall on.
+        let count = self.session.app().carts().len();
+        // A rescan is still wanted, so the queue matches the new view rather than the old one.
+        self.resident_at = None;
+        // The row, as the draw sees it: which carts are in the slots, and which of those are
+        // holding a face rather than the stand-in. A slot with `N` here is the stand-in on
+        // screen, and a slot index that is not in `window` means the two are answering
+        // different questions.
+        let slots: Vec<usize> = self.session.app().shelf_slot_carts();
+        let marks: String = slots
+            .iter()
+            .map(|&i| {
+                if self.session.app().face_of(i).is_some() {
+                    'Y'
+                } else {
+                    'N'
+                }
+            })
+            .collect();
+        self.session.boot_note(&format!(
+            "shelf {} lib {} view {} idx {} slots {:?} faces {}",
+            sys.dir_name(),
+            count,
+            self.session.app().shelf_view_len(),
+            self.session.app().shelf_index(),
+            slots,
+            marks
+        ));
+        self.session.boot_note(&format!(
+            "shelf geometry {} in {} ms",
+            sys.dir_name(),
             at.elapsed().as_millis()
         ));
     }
@@ -519,18 +717,23 @@ impl Frontend {
         if self.shelf_faces.busy() || self.shelf_missing.is_empty() {
             return;
         }
-        let count = self.session.app().carts().len();
-        let index = self.session.app().shelf_index();
-        // Only within the resident window. Without this the filler would keep working
-        // outward — the nearest missing cart is always just past the window — and the cap
-        // would be a treadmill instead of a cap.
+        // Only within the resident window, and the window is the row's own order — the carts
+        // the caret could reach by stepping, not by index arithmetic. Without the cap the
+        // filler would keep working outward and the cap would be a treadmill; without the view
+        // it works outward through carts no shelf is showing.
         let Some(pos) = self
             .shelf_missing
             .iter()
             .enumerate()
-            .filter(|(_, &i)| ring_distance(i, index, count) <= RESIDENT)
-            .min_by_key(|(_, &i)| ring_distance(i, index, count))
-            .map(|(p, _)| p)
+            .filter_map(|(p, &i)| {
+                self.session
+                    .app()
+                    .shelf_distance(i)
+                    .filter(|&d| d <= RESIDENT)
+                    .map(|d| (d, p))
+            })
+            .min_by_key(|&(d, _)| d)
+            .map(|(_, p)| p)
         else {
             return;
         };
@@ -564,12 +767,18 @@ impl Frontend {
         self.shelf_missing.clear();
         let mut released = Vec::new();
         for i in 0..count {
-            if let Some(tex) = self.session.app().face_of(i) {
-                if ring_distance(i, index, count) > RESIDENT + RESIDENT_HYSTERESIS {
-                    released.push((i, tex));
-                }
-            } else {
-                self.shelf_missing.push(i);
+            // Kept by *view* distance: see `Shelf::view_distance`. A cart the shelf up does not
+            // hold is not worth a face at all, and one it does hold is worth one however far
+            // away it sits in the library.
+            let held = self
+                .session
+                .app()
+                .shelf_distance(i)
+                .is_some_and(|d| d <= RESIDENT + RESIDENT_HYSTERESIS);
+            match (self.session.app().face_of(i), held) {
+                (Some(tex), false) => released.push((i, tex)),
+                (None, _) => self.shelf_missing.push(i),
+                _ => {}
             }
         }
         for (i, tex) in released {
@@ -619,8 +828,44 @@ impl Frontend {
         if self.session.app_mut().take_mode_dirty() {
             self.rebake(compositor);
         }
+        // The other thing the app can change that a texture cannot follow on its own: which
+        // machine's shelf is up. Same reason, same place.
+        if self.session.app_mut().take_shelf_dirty() {
+            self.set_shelf_geometry(compositor);
+        }
         // First, so a face that finished since the last frame is on screen this frame.
         self.pump_shelf_faces(compositor);
+        if !self.row_logged {
+            self.row_logged = true;
+            let (sys, lib, view, idx, slots, marks, win) = {
+                let app = self.session.app();
+                let slots = app.shelf_slot_carts();
+                let marks: String = slots
+                    .iter()
+                    .map(|&i| if app.face_of(i).is_some() { 'Y' } else { 'N' })
+                    .collect();
+                (
+                    app.shelf_system().dir_name().to_string(),
+                    app.carts().len(),
+                    app.shelf_view_len(),
+                    app.shelf_index(),
+                    slots,
+                    marks,
+                    app.shelf_draw_window(),
+                )
+            };
+            self.session.boot_note(&format!(
+                "shelf row {} lib {} view {} idx {} slots {:?} faces {} window {:?} cc {}",
+                sys,
+                lib,
+                view,
+                idx,
+                slots,
+                marks,
+                win,
+                self.session.app().display_palette_name()
+            ));
+        }
         // Set every frame rather than on the edge: the grade is part of the final blit, so
         // it has to be right whether or not anything just changed it.
         compositor.set_blue_light(self.session.app().blue_light());
@@ -629,8 +874,27 @@ impl Frontend {
         // The card's display filter, every frame so a SELECT+X (mask) or SELECT+Y (colour)
         // press lands on the next one.
         compositor.set_panel_mask(&self.session.app().display_mask());
-        compositor.set_color_correction(&self.session.app().display_cc());
+        compositor.set_color_correction(
+            &self.session.app().display_cc(),
+            &self.session.app().display_cc_bias(),
+        );
+        // The Game Boy's colour, which is a palette lookup rather than a matrix: four shades,
+        // four colours, and the table does the rest. `None` on every other machine and on
+        // 原生灰, which leaves the matrix path — and its two `pow`s — switched off.
+        let palette = self.session.app().display_palette();
+        compositor.set_palette(palette.as_ref());
+        // ...and the lattice over it, which on a Game Boy is the palette's own lightest shade:
+        // the dots and the picture are made of the same four colours, so there is no separate
+        // aperture table to keep in step with the palette.
+        match self.session.app().display_grid() {
+            Some((colour, mix)) => compositor.set_grid(&colour, mix),
+            None => compositor.set_grid(&[0.0, 0.0, 0.0], 0.0),
+        }
         compositor.set_cc_gamma(self.session.app().display_cc_gamma());
+        // Every frame, like the rest: the machine whose frame these filters are about is the
+        // cart under the highlight, and walking the row changes it. Cheap — the pass keeps its
+        // own answer and does nothing at all until it differs.
+        compositor.set_system(self.session.app().screen_system());
         compositor.begin_frame();
         if let Some(frame) = self.session.frame() {
             compositor.upload_game(&frame);
@@ -663,6 +927,20 @@ impl Frontend {
             &mut self.switcher,
         );
         sync_cheat_faces(self.session.app_mut(), compositor);
+        sync_palette_name(
+            self.session.app_mut(),
+            compositor,
+            &mut self.palette_tex,
+            &mut self.palette_named,
+        );
+        sync_overlay(self.session.app_mut(), compositor);
+        // The screen reflection: handed the overlay texture as its zone mask when the overlay
+        // up is a reflective one, `None` otherwise. Set every frame with the rest of the state.
+        compositor.set_reflection(if self.session.app().overlay_reflects() {
+            self.session.app().overlay_tex()
+        } else {
+            None
+        });
         self.draws.clear();
         self.session.app().draw(&mut self.draws);
         compositor.draw_list(&self.draws);
@@ -798,8 +1076,9 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
     }
     let shown = hhmm(app.wall_secs());
     if shown != clocks.shown {
-        // The clock's own size, not the label size the percent under the gauge is set in: the two
-        // are the two readings on the band and the time is the one that was asked to grow.
+        // The clock and the battery's percent are the two halves of one status row and are set at
+        // the same size now, in the same `STATUS_H`-tall band — `clock_face` and `word_face` own
+        // those two numbers, so nothing here has to say what they are.
         let face = clock_face(&shown);
         clocks.shown = shown;
         let w = face.w;
@@ -818,6 +1097,20 @@ fn sync_clock(app: &mut App, compositor: &mut Compositor, clocks: &mut Clocks) {
             let id = upload(compositor, &mut clocks.battery_tex, face);
             app.set_battery_percent_face(id, w);
         }
+    }
+    // The direct-connect address: baked when the connect script has left one behind, because DHCP
+    // decides it and the dialog's baked-at-boot lines cannot carry it.
+    if app.direct_ip_dirty() {
+        match app.direct_ip_str().map(str::to_string) {
+            Some(ip) if !ip.is_empty() => {
+                let face = slot_ui::dialog_line_face(&ip, 24.0);
+                let (w, h) = (face.w, face.h);
+                let id = compositor.create_texture(w, h, &face.rgba);
+                app.set_direct_ip_face(Some((id, w, h)));
+            }
+            _ => app.set_direct_ip_face(None),
+        }
+        app.clear_direct_ip_dirty();
     }
 }
 
@@ -872,6 +1165,35 @@ fn sync_shelf_title(
     }
 }
 
+/// The palette browser's one line of type: the name of the entry under the caret. Mirrors
+/// `sync_shelf_title` — one rasterise per move of the caret, and none at all on a frame where
+/// nothing moved — and it is the only text the browser has, which is what keeps a table of
+/// hundreds of entries cheap to walk.
+fn sync_palette_name(
+    app: &mut App,
+    compositor: &mut Compositor,
+    slot: &mut Option<TexId>,
+    shown: &mut Option<String>,
+) {
+    let want = app.palette_name_want();
+    if *shown == want {
+        return;
+    }
+    *shown = want.clone();
+    match want {
+        Some(name) => {
+            // The author's own name, number and all: `PS40 Sunburst` is what the same palette is
+            // called in `gbcpalettes.h`, so a name read off the device can be looked up there
+            // without a translation table in between.
+            let face = dialog_line_face(&name, PALETTE_NAME_PX);
+            let (w, h) = (face.w, face.h);
+            let id = upload(compositor, slot, face);
+            app.set_palette_name_face(Some((id, w, h)));
+        }
+        None => app.set_palette_name_face(None),
+    }
+}
+
 /// (Re)build the cheat table's row faces when the seated cart changes. Mirrors `sync_shelf_title`:
 /// only rasterises when the highlight's stem differs from the one the faces were last built for,
 /// so a long list is rasterised once per cart, not once per frame.
@@ -902,6 +1224,31 @@ fn sync_cheat_faces(app: &mut App, compositor: &mut Compositor) {
         }
         None => app.set_cheat_faces(None, Vec::new()),
     }
+}
+
+/// Reconciles the per-system screen overlay texture with `overlay_pixels`. Called every frame,
+/// but does nothing unless `overlay_dirty` is set: on insert the GL resource is minted once,
+/// and on a cart with no overlay (GBA, or a missing/corrupt PNG) any previous texture is
+/// released. The decoded RGBA is owned by `App`; only the compositor touches the GL name.
+fn sync_overlay(app: &mut App, compositor: &mut Compositor) {
+    if !app.overlay_dirty() {
+        return;
+    }
+    if let Some(old) = app.take_overlay_tex() {
+        compositor.release_texture(old);
+    }
+    let tex = match app.overlay_pixels() {
+        Some((rgba, w, h))
+            if *w > 0
+                && *h > 0
+                && (rgba.len() as u64) >= (*w as u64) * (*h as u64) * 4 =>
+        {
+            Some(compositor.create_texture(*w, *h, rgba))
+        }
+        _ => None,
+    };
+    app.set_overlay_tex(tex);
+    app.set_overlay_clean();
 }
 
 fn sync_core_picker(

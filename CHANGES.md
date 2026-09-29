@@ -498,3 +498,18 @@ the save.
 - **`README.md` is no longer a table of one-liners.** It carries an About this fork front page and
   a Controls section in which the four new chords are described one at a time — the rings, where
   each applies, what it persists, and what feedback it gives.
+
+---
+
+## 2026-09-29 更新（中文摘要）
+
+本小节为 09-29 当天迭代的中文说明，对应的英文代码改动尚未全部进入本变更日志的细节分节。
+
+- **反射层重做。** 屏幕漏光（glow）改为在遮罩艺术**之上**绘制（新增 `Draw::Glow` 标记），亮度由独立常量
+  `REFLECT_GAIN` 控制，不再由遮罩 alpha 反推；发光同时限定在屏幕窗口**之外**，避免画面被自身模糊副本糊住。
+  顺带修了一个写错的 uniform 绑定（`u_pal` 误用了 `u_pal_on` 的位置）。净亮度约 0.36 → 0.75（约 2.1 倍）。
+- **色板浏览器选中框。** 由中间灰（`edge()`）改为主题 `ink()`（暗色近白 / 日间近黑），框与名字同色；框与色带
+  间留 1px 缝，避免贴原生灰（`#FFFFFF`）等白色带时融掉。
+- **色板表裁剪。** 移除 4 条仅两色的色板（`PS02 Arduboy` / `PS13 Game Pocket Computer` / `PS14 Game & Watch Ball` /
+  `PS35 MS-Dos`）——GB 为 4 级灰，两色表会把中间两级压成阈值。现 343 条均为四色、正好 23 页。
+  该"不足四色即丢弃"的规则已写入生成器（见 `slot/src/palettes.rs` 的生成脚本），不再手改生成物。

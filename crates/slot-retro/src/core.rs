@@ -29,6 +29,12 @@ impl ButtonMask {
 pub struct AvInfo {
     pub fps: f64,
     pub sample_rate: f64,
+    /// The frame the core is actually handing back, in pixels. Measured off the video callback
+    /// rather than read from the geometry the core reports: it is the size the buffer really
+    /// is, which is the only size anybody downstream can safely cut it at. Zero until the
+    /// first frame arrives.
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug)]

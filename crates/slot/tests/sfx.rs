@@ -215,7 +215,7 @@ fn sfx_peak(setup: impl Fn(&mut Session)) -> u16 {
         &slot_store::SlotState {
             clock_set: true,
             ..slot_store::SlotState::default()
-        },
+        }
     )
     .unwrap();
     let mut s = Session::boot(d.path().to_path_buf());

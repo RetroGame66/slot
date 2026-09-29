@@ -31,6 +31,11 @@ enum PixelFormat {
 struct Host {
     video: Vec<u8>,
     format: PixelFormat,
+    /// The size of the picture the core last handed back, in pixels. Zero until the first
+    /// frame arrives. Read by `av_info` so anything downstream — the thumbnail encoder, say —
+    /// can cut the buffer at the size it really is rather than the size it was allocated at.
+    frame_w: u32,
+    frame_h: u32,
     audio: Vec<i16>,
     input: u16,
     system_dir: CString,
@@ -382,9 +387,16 @@ unsafe extern "C" fn video_refresh(
     with_host(|h| {
         let cols = width.min(GBA_W) as usize;
         let rows = height.min(GBA_H) as usize;
+        // Pack tightly into the destination at the *frame's* width, not the GBA's. A GB/GBC
+        // core hands its picture back as 160x144; writing 160 columns but striding on 240
+        // leaves an 80-pixel band of stale bytes at the end of every row, which the panel then
+        // shows as a second, offset copy of the picture. One destination stride, measured off
+        // the columns we actually copy, is all it takes for every machine to land where it
+        // belongs — and it makes the buffer well-formed for anything that cuts it by dimension.
+        let dst_stride = cols * 4;
         for y in 0..rows {
             let src = (data as *const u8).add(y * pitch);
-            let row = y * GBA_W as usize * 4;
+            let row = y * dst_stride;
             match h.format {
                 PixelFormat::Xrgb8888 => {
                     ptr::copy_nonoverlapping(src, h.video.as_mut_ptr().add(row), cols * 4);
@@ -404,6 +416,10 @@ unsafe extern "C" fn video_refresh(
                 }
             }
         }
+        // The size this frame really is, for anything that cuts the buffer by dimension
+        // rather than by the GBA it was allocated at (the thumbnail encoder).
+        h.frame_w = width.min(GBA_W);
+        h.frame_h = height.min(GBA_H);
     });
 }
 
@@ -460,14 +476,19 @@ impl LibretroCore {
     /// content root to point at, which is every test and nothing else.
     pub fn open(dylib: &Path) -> Result<Self, CoreError> {
         let dir = dylib.parent().unwrap_or(Path::new(".")).to_path_buf();
-        Self::open_with(dylib, &dir, &dir)
+        Self::open_with(dylib, &dir, &dir, &[])
     }
 
-    pub fn open_with(dylib: &Path, system_dir: &Path, save_dir: &Path) -> Result<Self, CoreError> {
+    pub fn open_with(
+        dylib: &Path,
+        system_dir: &Path,
+        save_dir: &Path,
+        initial_options: &[(&str, &str)],
+    ) -> Result<Self, CoreError> {
         if LIVE.swap(true, Ordering::SeqCst) {
             return Err(CoreError::Unsupported("a core is already open".into()));
         }
-        Self::open_inner(dylib, system_dir, save_dir)
+        Self::open_inner(dylib, system_dir, save_dir, initial_options)
             .inspect_err(|_| LIVE.store(false, Ordering::SeqCst))
     }
 
@@ -534,16 +555,36 @@ impl LibretroCore {
             .map(|s| s.to_string())
     }
 
-    fn open_inner(dylib: &Path, system_dir: &Path, save_dir: &Path) -> Result<Self, CoreError> {
+    fn open_inner(
+        dylib: &Path,
+        system_dir: &Path,
+        save_dir: &Path,
+        initial_options: &[(&str, &str)],
+    ) -> Result<Self, CoreError> {
         let lib = unsafe { Library::new(dylib) }.map_err(|e| CoreError::Load(e.to_string()))?;
         let api = unsafe { Api::load(&lib) }?;
         let version = unsafe { (api.api_version)() };
         if version != API_VERSION {
             return Err(CoreError::Unsupported(format!("libretro api {version}")));
         }
+        // Options the core reads during `retro_init` — libretro marks these "requires
+        // restart", and for SLOT that means they must already be in the host before the
+        // `(api.init)()` call below asks for them. `set_option` only runs after `open_with`
+        // returns, so it is too late for them. `mgba_sgb_borders` is the live case: mGBA
+        // defaults it ON and draws a Super Game Boy border for SGB-enhanced carts, which
+        // SLOT already frames in its own bezel.
+        let mut options: std::collections::HashMap<String, std::ffi::CString> =
+            std::collections::HashMap::with_capacity(initial_options.len());
+        for (key, value) in initial_options {
+            if let Ok(v) = std::ffi::CString::new(*value) {
+                options.insert((*key).to_string(), v);
+            }
+        }
         let mut host = Box::new(Host {
             video: vec![0; VIDEO_BYTES],
             format: PixelFormat::Xrgb8888,
+            frame_w: 0,
+            frame_h: 0,
             audio: Vec::new(),
             input: 0,
             system_dir: cdir(system_dir)?,
@@ -553,7 +594,7 @@ impl LibretroCore {
             netpacket: None,
             net: Link::default(),
             net_peer: None,
-            options: std::collections::HashMap::new(),
+            options,
             options_dirty: false,
         });
         unsafe {
@@ -574,6 +615,8 @@ impl LibretroCore {
             av: AvInfo {
                 fps: 0.0,
                 sample_rate: 0.0,
+                width: 0,
+                height: 0,
             },
             loaded: false,
             _lib: lib,
@@ -630,6 +673,8 @@ impl RetroCore for LibretroCore {
         self.av = AvInfo {
             fps: av.timing.fps,
             sample_rate: av.timing.sample_rate,
+            width: 0,
+            height: 0,
         };
         unsafe { (self.api.set_controller_port_device)(0, DEVICE_JOYPAD) };
         Ok(())
@@ -702,7 +747,12 @@ impl RetroCore for LibretroCore {
     }
 
     fn av_info(&self) -> AvInfo {
-        self.av
+        AvInfo {
+            fps: self.av.fps,
+            sample_rate: self.av.sample_rate,
+            width: self.host.frame_w,
+            height: self.host.frame_h,
+        }
     }
 
     fn rumble(&self) -> Rumble {
@@ -768,6 +818,8 @@ mod tests {
         Box::new(Host {
             video: Vec::new(),
             format: PixelFormat::Xrgb8888,
+            frame_w: 0,
+            frame_h: 0,
             audio: Vec::new(),
             input: 0,
             system_dir: CString::new(".").unwrap(),

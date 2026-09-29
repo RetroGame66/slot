@@ -484,7 +484,12 @@ impl Worker {
                         let _ = reply.send(core.save_ram());
                     }
                     Cmd::Thumb(reply) => {
-                        let _ = reply.send(crate::thumb::png(core.video_xrgb8888()));
+                        let av = core.av_info();
+                        let _ = reply.send(crate::thumb::png(
+                            core.video_xrgb8888(),
+                            av.width,
+                            av.height,
+                        ));
                     }
                     Cmd::BeginLink(client_id, t) => {
                         core.start_link(client_id);

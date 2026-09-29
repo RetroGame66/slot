@@ -29,7 +29,7 @@ fn quad(d: &Draw) -> Quad {
         | Draw::Tex { x, y, w, h, .. }
         | Draw::Turned { x, y, w, h, .. } => Quad { x, y, w, h },
         // The pass owns its own rect. Fully on is what a list carrying one is asking for.
-        Draw::Game | Draw::Shot { .. } => Quad {
+        Draw::Game | Draw::Glow | Draw::Shot { .. } => Quad {
             x: 0.0,
             y: 0.0,
             w: OUT_W as f32,
@@ -87,7 +87,7 @@ fn alpha(d: &Draw) -> f32 {
     match *d {
         Draw::Rect { colour, .. } => colour[3],
         Draw::Tex { alpha, .. } | Draw::Turned { alpha, .. } => alpha,
-        Draw::Game | Draw::Shot { .. } => 1.0,
+        Draw::Game | Draw::Glow | Draw::Shot { .. } => 1.0,
     }
 }
 

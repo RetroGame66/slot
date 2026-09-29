@@ -8,8 +8,8 @@ use slot_gfx::OUT_W;
 use slot_store::{Cart, Core};
 
 use crate::art;
-use crate::cart::{CartFace, CART_H, CART_W};
-use crate::shelf::FOOT_Y;
+use crate::cart::{size_for, CartFace, CART_H, CART_W};
+use crate::shelf::foot_y;
 use crate::shell::shell_for;
 use crate::slot_chrome::ease;
 use crate::text;
@@ -87,6 +87,16 @@ pub fn rom_marking_face(stem: &str) -> CartFace {
 }
 
 pub fn board_face(cart: &Cart) -> CartFace {
+    // The card's own board, if it supplied one. Its chips are drawn into the art and its lamps
+    // are magenta for the code to fill, so none of what follows applies: no shell-coloured
+    // placeholders to paint and no ROM line to ink, because the card has already drawn both.
+    if let Some(art) = crate::cart_art::board_art() {
+        return CartFace {
+            rgba: art.rgba.clone(),
+            w: art.w,
+            h: art.h,
+        };
+    }
     let shell = shell_for(&cart.code);
     // Deepest placeholder first and the wall last, so a shell whose own hex or shade matches
     // a placeholder still further down the list finds nothing left to replace: once a
@@ -238,11 +248,14 @@ pub struct Placed {
 
 /// The highlighted cart as the shelf stands it, once the row has settled.
 pub fn shelf_cart() -> Placed {
+    // The core picker opens the Advance cart: a Game Boy or Game Boy Color cart has the one
+    // core and nothing to choose, so this view is never reached for one.
+    let size = size_for(slot_store::System::Gba);
     Placed {
-        x: (OUT_W - CART_W) as f32 / 2.0,
-        y: FOOT_Y - CART_H as f32,
-        w: CART_W as f32,
-        h: CART_H as f32,
+        x: (OUT_W - size.w) as f32 / 2.0,
+        y: foot_y(size) - size.h as f32,
+        w: size.w as f32,
+        h: size.h as f32,
     }
 }
 

@@ -192,7 +192,7 @@ fn the_wall_clock_is_local_rather_than_the_utc_the_card_keeps() {
             clock_set: true,
             utc_offset_min: -300,
             ..SlotState::default()
-        },
+        }
     )
     .unwrap();
     let (a, _clock) = app_booting_at(d.path(), 1_700_000_000);
@@ -211,7 +211,7 @@ fn a_clock_that_never_got_set_is_asked_for_again() {
         &SlotState {
             clock_set: true,
             ..SlotState::default()
-        },
+        }
     )
     .unwrap();
     let (a, _clock) = app_booting_at(d.path(), 0);
@@ -232,7 +232,7 @@ fn a_clock_that_looks_like_a_real_date_is_not_asked_for_again() {
         &SlotState {
             clock_set: true,
             ..SlotState::default()
-        },
+        }
     )
     .unwrap();
     let (a, _clock) = app_booting_at(d.path(), 1_786_568_000);

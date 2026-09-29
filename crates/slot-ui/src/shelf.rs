@@ -1,28 +1,29 @@
-use slot_gfx::{Draw, TexId, OUT_H, OUT_W};
+use slot_gfx::{Draw, TexId, OUT_W};
 use slot_store::Cart;
 
-use crate::cart::{label_colour, label_panel, label_text, CART_H, CART_W};
+use crate::cart::{label_colour, label_text, size_for, CartSize};
+use slot_store::System;
 use crate::hud::Millis;
 use crate::slot_chrome::draw_empty_slot;
 
-/// Distance between cart centres. Wide enough that the side carts sit half off-screen, so the
-/// row reads as continuing past them rather than as three equal carts side by side.
-const PITCH: f32 = 360.0;
 /// The centre cart is drawn larger than the row so it reads as the one in hand; the
-/// neighbours keep their full size but are pushed to the edges (see PITCH). 1.5 makes the
-/// selection clearly the hero without dwarfing the neighbours off screen.
+/// neighbours keep their full size but are pushed to the edges (see the `CartSize` pitch). 1.5
+/// makes the selection clearly the hero without dwarfing the neighbours off screen.
 ///
 /// Public because it is not the shelf's business alone: the app scales the cart into the slot
 /// from this size, and a cart drawn at rest is a `CENTER_SCALE` cart to anything looking for
 /// one.
 pub const CENTER_SCALE: f32 = 1.5;
-pub const SIDE_SCALE: f32 = 1.0;
 /// How much of its face a side cart keeps at full recede. Public for the same reason as
 /// `CENTER_SCALE`: the app derives how much further to dim the neighbours from it, and that
 /// arithmetic has to follow this number rather than be written down against an old one.
 pub const SIDE_ALPHA: f32 = 0.7;
 /// Carts stand on the row rather than float: the foot stays put as a cart shrinks away.
-pub(crate) const FOOT_Y: f32 = (OUT_H + CART_H) as f32 / 2.0;
+/// Where the row's feet stand — the carts stand on the row rather than float on it. Derived
+/// from the cart's height, so a taller shell stands lower and the row keeps its proportions.
+pub(crate) fn foot_y(size: CartSize) -> f32 {
+    size.foot_y()
+}
 /// Critically damped, so a flick lands on a cart instead of bouncing past and returning.
 const OMEGA: f32 = 16.0;
 /// How far the cart next to the selection is pushed aside as the chosen one goes in. Enough
@@ -36,6 +37,26 @@ const SMEAR: f32 = 1.12;
 /// Slots considered either side of the selection. Two reach the edges of a 720 row, the
 /// third covers the lag while the spring is still catching up with a flick.
 const SLOTS: i32 = 3;
+
+/// How far a cart is drawn from its resting place at the top of a system-shelf swap beat, in
+/// offscreen pixels. Well past the top of the panel, so a risen cart is off screen and not
+/// merely high.
+const SWAP_RISE: f32 = 560.0;
+/// The stagger between neighbouring slots, as a share of the beat: the centre cart leads and
+/// each cart further out follows it, so the row is drawn away in order rather than at once.
+const SWAP_STAGGER: f32 = 0.16;
+
+/// The row's vertical motion while the system shelf is being swapped.
+///
+/// `p` is 0..1 through the current beat; `ascend` is true while the old shelf is being drawn
+/// up and away (the carts climb and fade), and false while the new shelf drops back into place
+/// (the carts fall from above and fade in). Absent at rest, so a still row is laid out exactly
+/// as it always was — this is the one thing a swap changes about the layout, and it is opt-in.
+#[derive(Copy, Clone)]
+pub struct Motion {
+    pub p: f32,
+    pub ascend: bool,
+}
 
 /// Before the first repeat. Long enough that a press meaning one cart cannot become two.
 const REPEAT_DELAY_MS: Millis = 400;
@@ -85,6 +106,9 @@ fn glide_seconds(distance: f32) -> f32 {
 
 pub struct Shelf {
     pub carts: Vec<Cart>,
+    /// Which machine's shelf is up. Every cart on the row belongs to it, and so does the row's
+    /// geometry: a Game Boy cart is portrait and a Game Boy shelf is its own layout.
+    system: System,
     /// The carts the ring actually walks, as indices into `carts`. The full library when
     /// nothing is filtered; the starred ones while the favourites shelf is up. A list of
     /// indices rather than a rebuilt cart list, and that is the whole point: `faces` stays
@@ -92,6 +116,21 @@ pub struct Shelf {
     /// the view changes. Rebuilding the shelf instead would drop those faces and put blank
     /// placeholders on screen while they were rasterised again.
     view: Vec<usize>,
+    /// Each machine's own shelf, in the order that shelf shows — the three libraries the row
+    /// can walk. `carts` is the card; these are the shelves, and the distinction is the whole
+    /// reason this exists: a machine shelf is a *scattered* subset of the card's sorted list
+    /// (this card files its three Game Boy carts at 27, 127 and 637 among nine hundred Advance
+    /// ones), so any measurement of "how far away is this cart" that walks `carts` is measuring
+    /// the wrong thing.
+    machines: [Vec<usize>; 3],
+    /// One entry per cart: its position in its own machine's shelf, or `u32::MAX` for a cart no
+    /// shelf shows. Where a switch to that machine lands is the *front* of this list, which is
+    /// what makes the front of every machine the set worth keeping faces for.
+    pos_in_machine: Vec<u32>,
+    /// One entry per cart: its position in `view`, or `u32::MAX` when the view does not hold it.
+    /// A table rather than a search, because the filler asks this of every cart it could build,
+    /// every frame.
+    pos_in_view: Vec<u32>,
     /// Position in `view`, not an index into `carts`. `current()` is what turns it back.
     pub index: usize,
     pub scroll: f32,
@@ -114,13 +153,30 @@ pub struct Shelf {
     /// A letter jump in flight. While one is running it owns `scroll` and the spring stands
     /// down; a cart step drops it so the arrows always answer immediately.
     glide: Option<Glide>,
+    /// The system-shelf swap in flight, if any. See `Motion`. `None` at rest.
+    motion: Option<Motion>,
 }
 
 impl Shelf {
     pub fn new(carts: Vec<Cart>) -> Self {
-        let view = (0..carts.len()).collect();
+        let view: Vec<usize> = (0..carts.len()).collect();
+        let mut machines: [Vec<usize>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+        let mut pos_in_machine = vec![u32::MAX; carts.len()];
+        for (i, c) in carts.iter().enumerate() {
+            let list = &mut machines[Self::machine_slot(c.system())];
+            pos_in_machine[i] = list.len() as u32;
+            list.push(i);
+        }
+        let mut pos_in_view = vec![u32::MAX; carts.len()];
+        for (p, &i) in view.iter().enumerate() {
+            pos_in_view[i] = p as u32;
+        }
         Shelf {
             carts,
+            machines,
+            pos_in_machine,
+            pos_in_view,
+            system: System::Gba,
             view,
             index: 0,
             scroll: 0.0,
@@ -130,20 +186,51 @@ impl Shelf {
             vel: 0.0,
             held: None,
             glide: None,
+            motion: None,
         }
+    }
+
+    /// Sets the swap motion, or clears it. Driven by the app, which owns the timing; the row
+    /// only reads it when laying out. `None` restores the resting layout exactly.
+    pub fn set_motion(&mut self, motion: Option<Motion>) {
+        self.motion = motion;
+    }
+
+    /// Which machine the row is showing. Set with the view, because the view is the machine's
+    /// carts: a Game Boy shelf is laid out for portrait carts and an Advance shelf for
+    /// landscape ones, and the row has to be told which it is looking at.
+    pub fn set_system(&mut self, system: System) {
+        self.system = system;
+    }
+
+    pub fn system(&self) -> System {
+        self.system
+    }
+
+    /// The row's geometry: the cart's own size, the pitch between neighbours and how much
+    /// bigger the selected one is.
+    pub fn size(&self) -> CartSize {
+        size_for(self.system)
     }
 
     /// Face textures in `carts` order. The caller uploads them because only the compositor
     /// can mint a `TexId`.
-    pub fn set_shadow(&mut self, face: TexId) {
-        self.shadow = Some(face);
+    ///
+    /// Returns the one it replaced: the frame is rebuilt whenever the row's machine changes,
+    /// because the shadow and the stand-in are both cut to that machine's cart, and a caller
+    /// that cannot release the old texture leaks half a megabyte per shelf switch.
+    pub fn set_shadow(&mut self, face: TexId) -> Option<TexId> {
+        self.shadow.replace(face)
     }
 
     /// The blank cart a not-yet-built face stands in as. Set once at boot, with the shadow.
-    pub fn set_placeholder(&mut self, face: TexId) {
-        self.placeholder = Some(face);
+    /// Returns what it replaced, for the reason `set_shadow` does.
+    pub fn set_placeholder(&mut self, face: TexId) -> Option<TexId> {
+        self.placeholder.replace(face)
     }
 
+    /// Face textures in `carts` order. The caller uploads them because only the compositor
+    /// can mint a `TexId`.
     pub fn set_faces(&mut self, faces: Vec<Option<TexId>>) {
         self.faces = faces;
     }
@@ -176,6 +263,23 @@ impl Shelf {
     pub fn find(&self, stem: &str) -> Option<(&Cart, Option<TexId>)> {
         let i = self.carts.iter().position(|c| c.stem == stem)?;
         Some((&self.carts[i], self.faces.get(i).copied().flatten()))
+    }
+
+    /// The position of a cart in the current *view*, by stem — i.e. what `index` counts in.
+    /// `None` when the view does not hold it, which for a system shelf means a cart belonging
+    /// to another machine. `find` searches the whole library; this searches only what the row
+    /// is actually showing, which is what a caller about to set `index` needs.
+    pub fn index_of_stem(&self, stem: &str) -> Option<usize> {
+        self.view.iter().position(|&i| self.carts[i].stem == stem)
+    }
+
+    /// The position in the view of the first cart filed under letter `slot`. The letter strip
+    /// counts the view (see `retally_letters`), so a seat on a letter has to be found in the
+    /// view too: a library index would be the wrong cart on a shelf that holds a subset of it.
+    pub fn view_position_of_letter(&self, slot: usize) -> Option<usize> {
+        self.view
+            .iter()
+            .position(|&i| crate::letters::slot_of(self.carts[i].initial) == slot)
     }
 
     /// Send the row to the cart the letter dial has just chosen, sweeping it across everything
@@ -237,6 +341,12 @@ impl Shelf {
     /// the reason `view` is a list of indices. The caret is parked on `keep` when the new view
     /// still holds it, and on the first cart otherwise.
     pub fn set_view(&mut self, view: Vec<usize>, keep: Option<&str>) {
+        for slot in self.pos_in_view.iter_mut() {
+            *slot = u32::MAX;
+        }
+        for (p, &i) in view.iter().enumerate() {
+            self.pos_in_view[i] = p as u32;
+        }
         self.view = view;
         self.index = keep
             .and_then(|stem| self.view.iter().position(|&i| self.carts[i].stem == stem))
@@ -247,13 +357,111 @@ impl Shelf {
         self.held = None;
     }
 
+    /// The carts the row is actually drawing, as indices into `carts`.
+    ///
+    /// This is the set a build has to cover, and it is **not** the same thing as a contiguous
+    /// run of indices around the caret. A machine shelf and the favourites shelf are both
+    /// *subsets* of the library — this card files its three Game Boy carts at 48..50 among nine
+    /// hundred Advance ones — so a window that walks the library lands on nine hundred Advance
+    /// carts and misses the three the row is showing. That is what "the side carts are still the
+    /// placeholder" looked like on the device: the boot had built seven carts nobody was looking
+    /// at.
+    ///
+    /// A cart's distance from the caret **in the row's own order**, or `None` when the view
+    /// does not hold it.
+    ///
+    /// Every measurement of "worth keeping a face for" has to be this one and not a library
+    /// distance. A machine shelf is a scattered subset of the library — this card's three Game
+    /// Boy carts sit at 27, 127 and 637 among nine hundred Advance ones, because the library is
+    /// sorted by title and the row is not — so the two carts either side of the caret are a
+    /// hundred and three hundred indices away. A resident window measured in the library
+    /// therefore releases exactly the faces the user is looking at, and the filler spends its
+    /// time on carts that are on no shelf at all.
+    pub fn view_distance(&self, cart: usize) -> Option<usize> {
+        let n = self.view.len();
+        if n == 0 {
+            return None;
+        }
+        let pos = *self.pos_in_view.get(cart)?;
+        if pos == u32::MAX {
+            return None;
+        }
+        let d = (pos as usize).abs_diff(self.index);
+        Some(d.min(n - d))
+    }
+
+    /// Which of the three shelves a machine's carts live on.
+    fn machine_slot(s: System) -> usize {
+        match s {
+            System::Gba => 0,
+            System::Gb => 1,
+            System::Gbc => 2,
+        }
+    }
+
+    /// One machine's shelf: its carts as library indices, in the order the row shows them.
+    pub fn machine_view(&self, s: System) -> Vec<usize> {
+        self.machines[Self::machine_slot(s)].clone()
+    }
+
+    /// How far a cart is from the caret that would be showing it.
+    ///
+    /// Two roads to the same cart, and the nearer one wins. If the view up holds it, that is the
+    /// distance that matters — the row on screen, favourites included. Otherwise it is counted
+    /// from the *front* of its own machine's shelf, because that is where a switch to that
+    /// machine parks the caret. Keeping both windows resident is what makes a machine switch
+    /// show real carts on the frame it lands rather than a row of stand-ins: by the time the
+    /// user reaches for the machine, its first screen is already built.
+    ///
+    /// O(1), deliberately: the filler asks this of every cart it could build, every frame.
+    pub fn shelf_distance(&self, cart: usize) -> Option<usize> {
+        let here = self.view_distance(cart);
+        let front = self
+            .pos_in_machine
+            .get(cart)
+            .copied()
+            .filter(|&p| p != u32::MAX)
+            .map(|p| p as usize);
+        match (here, front) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// Same walk as `slot_rects`, which is what draws them: the slots either side of the caret
+    /// in view order, and a cart's representative nearest the middle when the view is too short
+    /// to fill the row.
+    pub fn draw_window(&self) -> Vec<usize> {
+        let n = self.view.len() as i64;
+        if n == 0 {
+            return Vec::new();
+        }
+        let base = self.scroll.round() as i64;
+        let mut out = Vec::new();
+        for slot in -SLOTS..=SLOTS {
+            let off = slot as i64;
+            let r = off.rem_euclid(n);
+            let nearest = if r * 2 > n { r - n } else { r };
+            if nearest != off {
+                continue;
+            }
+            let i = self.view[(base + off).rem_euclid(n) as usize];
+            if !out.contains(&i) {
+                out.push(i);
+            }
+        }
+        out
+    }
+
     /// The carts the current view walks, in view order. A view is a list of indices, so this
     /// is how a caller that needs the carts themselves — the letter tally — reads one.
     pub fn visible(&self) -> Vec<&Cart> {
         self.view.iter().map(|&i| &self.carts[i]).collect()
     }
 
-    #[cfg(test)]
+    /// How many carts the current view holds. The library count and this differ on every
+    /// shelf that is a subset of it, which is the distinction the boot's face window has to
+    /// respect.
     pub fn view_len(&self) -> usize {
         self.view.len()
     }
@@ -410,7 +618,12 @@ impl Shelf {
             let cart = &self.carts[r.cart];
             // Black in the cart's own shape, under the dimmed face. Without it the dimming is
             // transparency, and over a wallpaper the row reads as ghosts of carts.
-            if r.alpha < 1.0 {
+            // The shadow exists to keep a dimmed cart solid: drawn at 0.7 the face is see-through,
+            // and over a wallpaper a translucent cart is a ghost. A cart that came with its own
+            // art does not need it — the art is opaque — and drawing it anyway leaves the
+            // silhouette showing through the art's antialiased edge as a dark rim on a light
+            // theme, which is exactly what it looked like.
+            if r.alpha < 1.0 && crate::cart_art::art_for(self.system).is_none() {
                 if let Some(tex) = self.shadow {
                     out.push(Draw::Tex {
                         x: r.x,
@@ -441,7 +654,7 @@ impl Shelf {
                 None => match self.placeholder {
                     Some(tex) => {
                         let c = label_colour(&label_text(cart));
-                        let (x0, y0, x1, y1) = label_panel(r.w as u32, r.h as u32);
+                        let (x0, y0, x1, y1) = self.size().label_panel_at(r.w as u32, r.h as u32);
                         let ink = [
                             c[0] as f32 / 255.0,
                             c[1] as f32 / 255.0,
@@ -551,20 +764,38 @@ impl Shelf {
             }
             let offset = coord as f32 - self.scroll;
             let t = offset.abs().min(1.0);
-            let scale = CENTER_SCALE + (SIDE_SCALE - CENTER_SCALE) * t;
-            let alpha = (1.0 + (SIDE_ALPHA - 1.0) * t) * (1.0 - recede);
-            let (w, h) = (CART_W as f32 * scale, CART_H as f32 * scale);
+            let size = self.size();
+            let scale = size.middle + (size.side - size.middle) * t;
+            let mut alpha = (1.0 + (SIDE_ALPHA - 1.0) * t) * (1.0 - recede);
+            let (w, h) = (size.w as f32 * scale, size.h as f32 * scale);
             // Away from the middle, and further the further out it already was, so the row
             // opens rather than sliding sideways.
             let away = offset.signum() * (1.0 + offset.abs());
-            let x = OUT_W as f32 / 2.0 + offset * PITCH - w / 2.0 + away * PART * recede;
+            let x = OUT_W as f32 / 2.0 + offset * size.pitch - w / 2.0 + away * PART * recede;
+            let mut y = foot_y(size) - h;
+            // The system-shelf swap, when one is running. The centre cart leads the beat and
+            // each cart further out follows it — drawn up and away on the way out, fallen back
+            // from above on the way in — so the row moves in order rather than all at once.
+            if let Some(m) = self.motion {
+                let lead = SWAP_STAGGER * (slot as f32).abs();
+                let span = (1.0 - SWAP_STAGGER * SLOTS as f32).max(0.05);
+                let f = ((m.p - lead) / span).clamp(0.0, 1.0);
+                let e = f * f * (3.0 - 2.0 * f);
+                if m.ascend {
+                    y -= e * SWAP_RISE;
+                    alpha *= 1.0 - e;
+                } else {
+                    y -= (1.0 - e) * SWAP_RISE;
+                    alpha *= e;
+                }
+            }
             if x + w <= 0.0 || x >= OUT_W as f32 || alpha <= 0.0 {
                 continue;
             }
             out.push(SlotRect {
                 cart: i,
                 x: x + shake,
-                y: FOOT_Y - h,
+                y,
                 w,
                 h,
                 alpha,

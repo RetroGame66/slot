@@ -43,7 +43,7 @@ fn the_core_is_told_the_bios_folder_not_the_dylib_folder() {
     let Some(dylib) = common::vendored_core() else {
         return;
     };
-    let core = LibretroCore::open_with(&dylib, &bios, &saves).unwrap();
+    let core = LibretroCore::open_with(&dylib, &bios, &saves, &[]).unwrap();
     assert_eq!(core.reported_system_dir(), bios.to_string_lossy());
     assert_ne!(
         core.reported_system_dir(),
@@ -64,7 +64,7 @@ fn the_core_is_told_the_saves_folder_too() {
     let Some(dylib) = common::vendored_core() else {
         return;
     };
-    let core = LibretroCore::open_with(&dylib, &bios, &saves).unwrap();
+    let core = LibretroCore::open_with(&dylib, &bios, &saves, &[]).unwrap();
     assert_eq!(core.reported_save_dir(), saves.to_string_lossy());
 }
 

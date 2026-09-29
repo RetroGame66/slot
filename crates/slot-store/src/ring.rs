@@ -28,7 +28,19 @@ impl StateRing {
     /// States are core private: a serialized machine from one emulator cannot be loaded by
     /// another, so offering them together would only produce a confusing failure. Battery
     /// saves under `Saves/` are raw cartridge bytes and stay shared.
-    pub fn new(root: &Path, core: Core, stem: &str) -> Self {
+    pub fn new(root: &Path, core: Core, system: crate::System, stem: &str) -> Self {
+        StateRing {
+            dir: root
+                .join("States")
+                .join(core.as_str())
+                .join(system.dir_name())
+                .join(stem),
+        }
+    }
+
+    /// The ring a card that has not been sorted into machine folders still has its states in:
+    /// `States/<core>/<stem>`. Only ever read, and only after the sorted ring came back empty.
+    pub fn legacy(root: &Path, core: Core, stem: &str) -> Self {
         StateRing {
             dir: root.join("States").join(core.as_str()).join(stem),
         }

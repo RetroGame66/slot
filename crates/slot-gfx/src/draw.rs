@@ -52,6 +52,12 @@ pub enum Draw {
     /// because the panel is the front surface of the device and has to be able to come up
     /// over a cart that is already in the slot.
     Game,
+    /// Where the screen glow goes, if the overlay up asks for one: the picture's own edge
+    /// carried out past its window, over the bezel. A marker of its own rather than something
+    /// the `Game` marker carries, because **the two are not at the same place in the list**:
+    /// the glow belongs over the overlay art, and the picture belongs under it. See
+    /// `Compositor::draw_reflection` for why that is the order light actually takes.
+    Glow,
     /// A 240x160 still on the panel, through the game pass. Geometry comes from the pass for
     /// the same reason `Game`'s does: it is the same screen, showing a picture instead of a
     /// live frame, so it wears the same mask at the same scale.
@@ -207,8 +213,9 @@ impl Sprites {
                     Some(&t) if t != 0 => (x, y, w, h, t, [1.0, 1.0, 1.0, alpha], turn),
                     _ => continue,
                 },
-                // The compositor splits the list on these and draws the game pass itself.
-                Draw::Game | Draw::Shot { .. } => continue,
+                // The compositor splits the list on these and draws the game pass, the still
+                // and the glow itself.
+                Draw::Game | Draw::Glow | Draw::Shot { .. } => continue,
             };
             // Exactly (1, 0) for anything unturned rather than cos and sin of zero, so the
             // shader's correction term is zero by construction and not by rounding.

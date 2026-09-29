@@ -4,6 +4,7 @@ mod barcode;
 mod battery;
 mod board;
 mod cart;
+mod cart_art;
 mod clock;
 mod draw;
 mod hud;
@@ -11,6 +12,7 @@ mod icon;
 pub mod lang;
 pub mod letters;
 pub mod palette;
+mod palette_browser;
 mod plate;
 mod polaroids;
 mod power_menu;
@@ -27,7 +29,7 @@ mod toast;
 
 pub use backdrop::{draw_backdrop, wallpaper_face};
 pub use barcode::{code39, CODE39_NARROW, CODE39_WIDE};
-pub use battery::{capsule_left, cluster_h, draw_gauge, BOLT_PX, GAUGE_H, GAUGE_W, WALL};
+pub use battery::{cluster_h, draw_gauge, BOLT_H, BOLT_PX, BOLT_W};
 pub use board::{
     board_at, board_face, board_zoom, chip_face, chip_shadow_face, grown, lid_at, lift_of,
     on_board, padded, rom_marking, rom_marking_face, shelf_cart, slide_of, socket_face, Placed,
@@ -36,30 +38,44 @@ pub use board::{
     SOCKET_U, SOCKET_V, SOCKET_W, TURN_PAD,
 };
 pub use cart::face_profile;
+pub use cart_art::{
+    board_art, install as install_cart_art, label_share as cart_label_share,
+    load as load_cart_art, summary as cart_art_summary,
+};
 // Re-exported rather than defined here: the rule that turns a file name into a title belongs
 // with the scan, because the ring's letter is decided from it and a scan cannot ask the ui.
 pub use slot_store::{clean_label, label_tags};
 
 pub use cart::{
-    cart_face, cart_placeholder, cart_shadow, label_colour, label_panel, label_text, CartFace,
-    CART_H, CART_W, FACE_H, FACE_SCALE, FACE_W, LABEL_H, LABEL_W, LABEL_X, LABEL_Y,
+    cart_face, cart_placeholder, cart_shadow, label_colour, label_panel, label_text, size_for,
+    CartFace, CartSize, CART_H, CART_W, FACE_H, FACE_SCALE, FACE_W, LABEL_H, LABEL_W, LABEL_X,
+    LABEL_Y,
 };
 pub use clock::{clock_label, hhmm, set_clock_hint_face, ClockPicker, Field};
 pub use draw::{Draw, TexId, OUT_H, OUT_W};
+// The entry point for reading a PNG the user dropped on the card (e.g. a screen overlay).
+// Exposed so `slot` can decode `Overlay/<sys>/<sys>.png` without the rest of `art` going public.
+pub use art::decode_rgba;
 pub use hud::{ff_badge, FfState, Hud, HudKind, Millis, HUD_ICON_PX, HUD_MS, PLATE_H, PLATE_Y};
 pub use icon::{icon_box, icon_face, Icon};
 pub use letters::Letters;
 pub use palette::Mode;
+pub use palette_browser::{
+    draw as draw_palette_browser, pages_of as palette_pages, View as PaletteView,
+    BANDS as PALETTE_BANDS, COLS as PALETTE_COLS, NAME_PX as PALETTE_NAME_PX,
+    PER_PAGE as PALETTE_PER_PAGE, ROWS as PALETTE_ROWS,
+};
 pub use plate::{
     arrows_hint_face, arrows_hint_width, cap_width, clock_face, clock_width, hint_face, hint_quad,
-    hint_row, hint_width, shelf_title_face, title_face, word_face, word_width, Hint, UndoFace,
-    ARROW_GAP, CAP, CAP_GAP, HINT_EDGE, HINT_GAP, HINT_H, SHELF_TITLE_H, SHELF_TITLE_W, TITLE_H,
-    TITLE_W,
+    dialog_line_face, hint_row, hint_width, shelf_title_face, title_face, word_face, word_width,
+    Hint, UndoFace,
+    ARROW_GAP, CAP, CAP_GAP, HINT_EDGE, HINT_GAP, HINT_H, SHELF_TITLE_H, SHELF_TITLE_W, STATUS_H,
+    TITLE_H, TITLE_W,
 };
 pub use polaroids::{photo_face, PhotoFace, Polaroids, DOT, LEGEND, PHOTO_H, PHOTO_W};
 pub use power_menu::{cheat_row_face, menu_face, PowerChoice, MENU_PAD};
 pub use refusal::Refusal;
-pub use shelf::{Shelf, SlotRect, CENTER_SCALE, SIDE_ALPHA};
+pub use shelf::{Motion, Shelf, SlotRect, CENTER_SCALE, SIDE_ALPHA};
 pub use shell::{
     lookup_order_is_exact_then_family_then_default, shell_for, table_keys, Finish, Shell,
     DEFAULT_SHELL,

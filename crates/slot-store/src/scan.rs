@@ -5,7 +5,52 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use crate::atomic::atomic_write;
-use crate::gba::header;
+use crate::gba::{header, sgb_enhanced};
+
+/// Which machine a cart is for, and so which shelf it belongs on.
+///
+/// Three shelves, because that is how a card is filed and how a hand asks for one. Decided off
+/// the *extension* rather than by opening the rom, for the same reason everything else here is:
+/// the fast path of `scan_cached` reads a name and nothing else, and a property that costs a
+/// name to answer is free.
+///
+/// A zip deliberately gets no fourth. Two reasons, and the second is the one that decides it:
+/// the cores are handed the bytes of the file this frontend read off the card, so a zip would
+/// reach the core as an archive rather than as a rom — there is no extraction stage here the
+/// way RetroArch has one — and worse, an extension is the only thing that tells these three
+/// apart for free. A zip throws that away and leaves the machine unknowable without opening the
+/// file to look inside it.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum System {
+    Gba,
+    Gb,
+    Gbc,
+}
+
+impl System {
+    /// From whatever follows the last dot in a file name. Compared without case, because a
+    /// card written on another machine arrives in whatever case that machine felt like.
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        if ext.eq_ignore_ascii_case("gba") {
+            Some(System::Gba)
+        } else if ext.eq_ignore_ascii_case("gb") {
+            Some(System::Gb)
+        } else if ext.eq_ignore_ascii_case("gbc") {
+            Some(System::Gbc)
+        } else {
+            None
+        }
+    }
+
+    /// The folder this machine's carts and faces go in, on a card that sorts them.
+    pub fn dir_name(self) -> &'static str {
+        match self {
+            System::Gba => "GBA",
+            System::Gb => "GB",
+            System::Gbc => "GBC",
+        }
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Cart {
@@ -21,6 +66,31 @@ pub struct Cart {
     /// and not the header title. Derived here rather than stored, because it is one binary
     /// search over a table already in the binary and the cache does not need a column for it.
     pub initial: char,
+}
+
+impl Cart {
+    /// Which machine this cart is for, read off the rom's own extension.
+    ///
+    /// A method rather than a field, and derived rather than stored, because it is a fact about
+    /// the file's name: one `extension` either way, and nothing for a second copy of it to
+    /// disagree with.
+    ///
+    /// `Gba` for a rom whose extension is none of the three, which cannot reach a cart — `scan`
+    /// and `scan_cached` both filter on `is_rom` first — so it is a default nothing ever takes.
+    pub fn system(&self) -> System {
+        self.rom
+            .extension()
+            .and_then(|e| e.to_str())
+            .and_then(System::from_extension)
+            .unwrap_or(System::Gba)
+    }
+
+    /// Whether this cart's rom is Super Game Boy enhanced — mGBA would draw an SGB border
+    /// for it unless SLOT turns that off. Reads the rom on demand, so it is not part of the
+    /// scan fast path; calling it per cart at boot would cost a header read apiece.
+    pub fn sgb_enhanced(&self) -> bool {
+        sgb_enhanced(&self.rom)
+    }
 }
 
 #[derive(Debug)]
@@ -49,7 +119,7 @@ impl From<std::io::Error> for StoreError {
 /// Reads every rom's header, so a shelf built off this pays for the whole card. `scan_cached`
 /// is what a boot calls; this is the reference the cache has to agree with.
 pub fn scan(root: &Path) -> Result<Vec<Cart>, StoreError> {
-    let games = list_names(&root.join("Games"), is_gba)?;
+    let games = list_names(&root.join("Games"), is_rom, true)?;
     let labels = labels_set(&root.join("Labels"))?;
     Ok(build(root, &games, &labels, None).0)
 }
@@ -75,8 +145,9 @@ pub fn scan(root: &Path) -> Result<Vec<Cart>, StoreError> {
 pub fn scan_cached(root: &Path) -> Result<Vec<Cart>, StoreError> {
     let games_dir = root.join("Games");
     let labels_dir = root.join("Labels");
-    let games = list_names(&games_dir, is_gba)?;
-    let labels = list_names(&labels_dir, is_png)?;
+    let games = list_names(&games_dir, is_rom, true)?;
+    let labels = list_names(&labels_dir, is_png, true)?;
+    let label_set = label_keys(&labels);
     let stamp = Stamp {
         games: dir_mtime(&games_dir),
         labels: dir_mtime(&labels_dir),
@@ -85,11 +156,10 @@ pub fn scan_cached(root: &Path) -> Result<Vec<Cart>, StoreError> {
     let cached = read_cache(root);
     if let Some(c) = &cached {
         if c.stamp == stamp && c.games == games && c.labels == labels && c.rows_agree() {
-            return Ok(carts_from_rows(root, &c.rows));
+            return Ok(carts_from_rows(root, &c.rows, &label_set));
         }
     }
 
-    let label_set: HashSet<String> = labels.iter().filter_map(|n| stem_of(n)).collect();
     let (carts, rows) = build(
         root,
         &games,
@@ -306,35 +376,100 @@ fn unescape(s: &str) -> String {
 /// Names, sorted. Read as names rather than as entries because on the fast path that is all
 /// the shelf needs: whether a game was added or removed is a question about the names, and
 /// the answer must not cost a stat per file.
-fn list_names(dir: &Path, keep: fn(&Path) -> bool) -> Result<Vec<String>, StoreError> {
+/// `recursive` walks `dir`'s subdirectories too, and the returned strings are then **paths
+/// relative to `dir`** (`GBA/GBA中文/x.gba`). `Games/` is walked recursively so a card may file its
+/// games per machine (or per machine and language) and still be one shelf; `Labels/` is walked
+/// flat, so a card that files labels the same way is not found unless the lookup is told about
+/// the subdirectory — which is why the label lookup uses `stem_of` (the *file* name's stem) either
+/// way. On a flat card a relative path is just the name, so an existing card's cache still agrees.
+fn list_names(dir: &Path, keep: fn(&Path) -> bool, recursive: bool) -> Result<Vec<String>, StoreError> {
+    let mut names = Vec::new();
+    collect_names(dir, Path::new(""), keep, recursive, &mut names)?;
+    names.sort();
+    Ok(names)
+}
+
+fn collect_names(
+    dir: &Path,
+    rel: &Path,
+    keep: fn(&Path) -> bool,
+    recursive: bool,
+    out: &mut Vec<String>,
+) -> Result<(), StoreError> {
     let entries = match std::fs::read_dir(dir) {
         Ok(d) => d,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e.into()),
     };
-    let mut names = Vec::new();
     for entry in entries {
         let path = entry?.path();
+        if path.is_dir() {
+            // A card's own bookkeeping (System Volume Information, and a Mac's ._ sidecars) is not
+            // a machine folder; walking it would only ever turn up junk.
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if recursive && !name.starts_with('.') && name != "System Volume Information" {
+                collect_names(&path, &rel.join(name), keep, recursive, out)?;
+            }
+            continue;
+        }
         if !keep(&path) {
             continue;
         }
-        // A name that is not UTF-8 cannot be keyed by stem, labelled, or written to the
-        // cache. Skipped rather than failing the shelf over it.
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            names.push(name.to_string());
+        // A name that is not UTF-8 cannot be keyed by stem, labelled, or written to the cache.
+        // Skipped rather than failing the shelf over it.
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let joined = rel.join(name);
+        if let Some(s) = joined.to_str() {
+            out.push(s.replace('\\', "/"));
         }
     }
-    names.sort();
-    Ok(names)
+    Ok(())
 }
 
 /// The stems of everything in `Labels/`, so a cart can be asked whether it has a face without
 /// a stat of its own.
 fn labels_set(dir: &Path) -> Result<HashSet<String>, StoreError> {
-    Ok(list_names(dir, is_png)?
-        .iter()
-        .filter_map(|n| stem_of(n))
-        .collect())
+    Ok(label_keys(&list_names(dir, is_png, true)?))
+}
+
+/// The label files as keys: the path under `Labels/` with its `.png` taken off — `<machine>/<stem>`
+/// for a card that sorts its art the way it sorts its games, `<stem>` for a flat one. Both
+/// spellings live in one set, so a card that mirrors some of its art and not the rest still finds
+/// every file it has, and `has_label` stays a set lookup rather than a stat per cart.
+fn label_keys(names: &[String]) -> HashSet<String> {
+    let mut keys = HashSet::new();
+    for n in names {
+        if n.len() > 4 && n.to_ascii_lowercase().ends_with(".png") {
+            keys.insert(n[..n.len() - 4].to_string());
+        }
+    }
+    keys
+}
+
+/// The machine folder a rom name belongs in, from its extension — the same decision
+/// `System::from_extension` makes, spelled as the folder a sorted card files it under.
+fn machine_of(name: &str) -> Option<&'static str> {
+    let ext = Path::new(name).extension().and_then(|e| e.to_str())?;
+    System::from_extension(ext).map(System::dir_name)
+}
+
+/// Where a cart's art is, if the card carries it: `Labels/<machine>/<stem>.png` on a sorted card,
+/// else the flat `Labels/<stem>.png`. `keys` is what `label_keys` built from one directory walk.
+fn label_for(
+    labels_dir: &Path,
+    machine: Option<&str>,
+    stem: &str,
+    keys: &HashSet<String>,
+) -> Option<PathBuf> {
+    if let Some(machine) = machine {
+        if keys.contains(&format!("{machine}/{stem}")) {
+            return Some(labels_dir.join(machine).join(format!("{stem}.png")));
+        }
+    }
+    keys.contains(stem)
+        .then(|| labels_dir.join(format!("{stem}.png")))
 }
 
 fn stem_of(name: &str) -> Option<String> {
@@ -372,17 +507,16 @@ fn build(
             Some(row) => (row.title.clone(), row.code.clone()),
             None => header(&rom),
         };
-        let has_label = stem_of(name).is_some_and(|stem| labels.contains(&stem));
+        let stem = stem_of(name).unwrap_or_default();
+        let label = label_for(&labels_dir, machine_of(name), &stem, labels);
         rows.push(Row {
             name: name.clone(),
             size,
             mtime,
-            has_label,
+            has_label: label.is_some(),
             title: title.clone(),
             code: code.clone(),
         });
-        let stem = stem_of(name).unwrap_or_default();
-        let label = has_label.then(|| labels_dir.join(format!("{stem}.png")));
         carts.push(Cart {
             initial: bucket(&stem),
             stem,
@@ -408,7 +542,7 @@ fn bucket(stem: &str) -> char {
 }
 
 /// The carts a cache holds, rebuilt without touching a rom.
-fn carts_from_rows(root: &Path, rows: &[Row]) -> Vec<Cart> {
+fn carts_from_rows(root: &Path, rows: &[Row], labels: &HashSet<String>) -> Vec<Cart> {
     let games_dir = root.join("Games");
     let labels_dir = root.join("Labels");
     let mut carts: Vec<Cart> = rows
@@ -417,7 +551,8 @@ fn carts_from_rows(root: &Path, rows: &[Row]) -> Vec<Cart> {
             let stem = stem_of(&row.name).unwrap_or_default();
             let label = row
                 .has_label
-                .then(|| labels_dir.join(format!("{stem}.png")));
+                .then(|| label_for(&labels_dir, machine_of(&row.name), &stem, labels))
+                .flatten();
             Cart {
                 initial: bucket(&stem),
                 stem,
@@ -476,17 +611,16 @@ fn mtime_secs(m: &Metadata) -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-/// The extension, decided from the name alone.
+/// Whether this file is a cart at all: any of the three extensions, whichever machine's.
 ///
-/// A stat per cart is the cost the cache exists to remove, so the entry's type is not asked
-/// about: a directory named `Foo.gba` is not a cart anyone has, and every real shelf is
-/// files. This is also why `scan` and `scan_cached` share it — two predicates would let the
-/// cache and the reference disagree about the same card.
-fn is_gba(p: &Path) -> bool {
+/// What used to be a plain `.gba` test, widened rather than replaced, and `scan` and
+/// `scan_cached` still share one predicate for exactly the reason they shared that one — two
+/// predicates would let the cache and the reference disagree about the same card.
+fn is_rom(p: &Path) -> bool {
     !is_hidden(p)
         && p.extension()
             .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("gba"))
+            .is_some_and(|e| System::from_extension(e).is_some())
 }
 
 fn is_png(p: &Path) -> bool {

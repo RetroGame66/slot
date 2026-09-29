@@ -1,8 +1,8 @@
 use slot_power::{Battery, Charge};
 use slot_store::Cart;
 use slot_ui::{
-    cluster_h, draw_status, label_colour, Draw, Printed, Shelf, TexId, CART_W, CENTER_SCALE,
-    HINT_H, OUT_W, TOP_BAND_H,
+    cluster_h, draw_status, label_colour, Draw, Printed, Shelf, TexId, CART_W, CENTER_SCALE, OUT_W,
+    STATUS_H, TOP_BAND_H,
 };
 
 fn shelf_with(n: usize) -> Shelf {
@@ -28,7 +28,7 @@ fn placed(s: &Shelf) -> Vec<(f32, f32)> {
             Draw::Rect { x, w, .. } => (x, w),
             Draw::Tex { x, w, .. } => (x, w),
             Draw::Turned { x, w, .. } => (x, w),
-            Draw::Game | Draw::Shot { .. } => (0.0, OUT_W as f32),
+            Draw::Game | Draw::Glow | Draw::Shot { .. } => (0.0, OUT_W as f32),
         })
         .collect()
 }
@@ -36,7 +36,7 @@ fn placed(s: &Shelf) -> Vec<(f32, f32)> {
 fn xw(d: &Draw) -> (f32, f32) {
     match *d {
         Draw::Rect { x, w, .. } | Draw::Tex { x, w, .. } | Draw::Turned { x, w, .. } => (x, w),
-        Draw::Game | Draw::Shot { .. } => (0.0, OUT_W as f32),
+        Draw::Game | Draw::Glow | Draw::Shot { .. } => (0.0, OUT_W as f32),
     }
 }
 
@@ -383,9 +383,8 @@ fn the_mode_badge_follows_the_clock_and_keeps_out_of_the_middle() {
         badge.0
     );
     // And it is on the band's line rather than floating above or below it: centred on the same
-    // 24px line the clock is set on. The gauge's cluster is not on that line any more — it has
-    // the number under it, so it is taller than a line and is centred on the band on its own —
-    // but the two ends still share their middle, which is what this holds for the badge's end.
+    // `STATUS_H` line the clock is set on, which is the line the gauge's own cluster occupies
+    // too. All three share one middle, and this is the badge's end of that agreement.
     assert!(
         badge.1 > 0.0 && badge.1 + badge.3 < 58.0,
         "the badge left the band: {}..{}",
@@ -396,11 +395,15 @@ fn the_mode_badge_follows_the_clock_and_keeps_out_of_the_middle() {
 
 /// The two ends of the band are centred on the same line, which is the band's own middle.
 ///
-/// Worth a test because the two are placed by different arithmetic and only one of them is a
-/// single row of type: the clock and the badge are `(TOP_BAND_H - HINT_H) / 2`, and the gauge is
-/// a capsule with a number under it, centred as a cluster. Nothing in either expression mentions
-/// the other, so the agreement is a coincidence of the numbers — and a coincidence that a change
-/// to one of the four constants would silently break, leaving one end of the band sitting high.
+/// Worth a test because the two are placed by different arithmetic: the clock and the badge are
+/// `(TOP_BAND_H - STATUS_H) / 2`, and the gauge is centred as a cluster of its own. Nothing in
+/// either expression mentions the other, so the agreement rests on `cluster_h()` being
+/// `STATUS_H` — which is the one thing that keeps a change to either end from leaving the other
+/// sitting high.
+///
+/// The cluster is one band of type now, so the highest quad at the right-hand end *is* the
+/// percent and its top is the cluster's top. That is a simpler shape than the capsule-plus-number
+/// this test was written against, and the assertion is the same one.
 #[test]
 fn both_ends_of_the_band_are_centred_on_the_same_line() {
     let mut out = Vec::new();
@@ -420,16 +423,16 @@ fn both_ends_of_the_band_are_centred_on_the_same_line() {
         .iter()
         .find_map(|d| match *d {
             Draw::Rect { x, y, w, .. } if (x - 24.0).abs() < 0.01 && w >= 40.0 => {
-                Some(y + HINT_H as f32 / 2.0)
+                Some(y + STATUS_H as f32 / 2.0)
             }
             Draw::Tex { x, y, w, .. } if (x - 24.0).abs() < 0.01 && w >= 40.0 => {
-                Some(y + HINT_H as f32 / 2.0)
+                Some(y + STATUS_H as f32 / 2.0)
             }
             _ => None,
         })
         .expect("the clock was not drawn at the left margin");
-    // The gauge cluster's middle, from the capsule's own top edge — the highest quad at the
-    // right-hand end that is not the percent's, which is the one below it.
+    // The gauge cluster's middle, from its own top edge — the highest quad at the right-hand
+    // end, which with no capsule above the number is the percent itself.
     let capsule_top = out
         .iter()
         .filter_map(|d| match *d {
@@ -575,7 +578,7 @@ fn cart_spans(out: &[Draw]) -> Vec<(f32, f32)> {
             Draw::Rect { x, w, h, .. }
             | Draw::Tex { x, w, h, .. }
             | Draw::Turned { x, w, h, .. } => (h > 60.0).then_some((x, x + w)),
-            Draw::Game | Draw::Shot { .. } => None,
+            Draw::Game | Draw::Glow | Draw::Shot { .. } => None,
         })
         .filter(|(x0, x1)| *x1 > 0.0 && *x0 < OUT_W as f32)
         .collect()

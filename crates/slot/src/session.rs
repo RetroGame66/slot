@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use slot_input::{Action, Gestures, Millis, RawEvent};
 use slot_retro::Rumble;
+use slot_store::{Core, System};
 use slot_ui::{FfState, Toast};
 
 use crate::app::{App, Phase};
@@ -214,6 +215,12 @@ impl Session {
         if trace() {
             eprintln!("slot: {action:?} in {:?}", self.app.phase());
         }
+        // A system-shelf swap blanks the buttons: nothing reaches `App` and the pad is not
+        // updated, so the movement plays out untouched. The volume and mute side of `act` is
+        // behind this too, which is the point — a level change mid-swap is a key that landed.
+        if self.app.input_locked() {
+            return;
+        }
         match action {
             Action::RewindStart => self.rewinding = true,
             Action::RewindStop => self.rewinding = false,
@@ -403,7 +410,7 @@ impl Session {
     /// press taken while paused whose release arrives after it is a button the game finds
     /// already down. This is what stops either edge reaching the pad at all.
     fn overlaid(&self) -> bool {
-        self.showing_polaroids() || self.app.game_menu_open()
+        self.showing_polaroids() || self.app.game_menu_open() || self.app.palette_browser().is_some()
     }
 
     /// Whether the game is live and in charge of the device. Not the phase alone: the power
@@ -422,6 +429,7 @@ impl Session {
             || self.app.game_menu_open()
             || self.app.shutting_down()
             || self.app.cheat_menu().is_some()
+            || self.app.palette_browser().is_some()
     }
 
     fn dozing(&self) -> bool {
@@ -511,12 +519,12 @@ impl Session {
     }
 
     fn spawn_core(&mut self, stem: &str) {
-        let Some(rom) = self
+        let Some((rom, system)) = self
             .app
             .carts()
             .iter()
             .find(|c| c.stem == stem)
-            .map(|c| c.rom.clone())
+            .map(|c| (c.rom.clone(), c.system()))
         else {
             return;
         };
@@ -527,18 +535,32 @@ impl Session {
         // in practice, right up until `open_core` did not yet know `Core` existed. `App` stores
         // this rather than re-deriving it later, which is what makes that class of drift
         // structurally unreachable now instead of merely unobserved.
-        let core = slot_store::core_for(&self.root, stem);
+        // gpSP does the Game Boy Advance and nothing else, so anything that is not one has
+        // exactly one core that can take it, whatever the card's own file says — including a
+        // line somebody wrote into it by hand. Everything downstream reads the core from the
+        // variable above, so clamping it here is all it takes to keep a `.gb` off gpSP.
+        let core = match system {
+            System::Gba => slot_store::core_for(&self.root, stem),
+            System::Gb | System::Gbc => Core::Mgba,
+        };
         self.app.set_core(core);
+        // An SGB-enhanced GB/GBC cart would draw mGBA's Super Game Boy border, which SLOT
+        // already covers with its own bezel — so it is disabled at core open (see
+        // `open_core_for`). Note it here so a hand debugging "why is this cart framed
+        // differently" can see the real cause in the log.
+        if matches!(system, System::Gb | System::Gbc) && slot_store::sgb_enhanced(&rom) {
+            eprintln!("slot: {stem} is SGB-enhanced; mGBA Super Game Boy border disabled");
+        }
         // A clean start skips the state, it does not delete it: the file stays on the card
         // for the next tap to resume from.
         let resume = (!self.app.starting_clean())
-            .then(|| persist::read_resume(&self.root, core, stem))
+            .then(|| persist::read_resume(&self.root, core, system, stem))
             .flatten();
         let emu = EmuHandle::spawn(
-            open_core(&self.root, core),
+            open_core(&self.root, core, system),
             rom,
             self.sink.ring(),
-            persist::load_sav(&self.root, stem),
+            persist::load_sav(&self.root, system, stem),
             resume,
             self.audio,
         );
@@ -552,6 +574,45 @@ impl Session {
         // want. SELECT+A while the table is open flips the master `cheats_on` and re-pushes.
         self.app.set_cheats(crate::root::cheats(&self.root, stem));
         self.push_cheats();
+        // The screen-overlay set for the cart's system (`Overlay/gb*.png` / `gbc*.png`), with
+        // the persisted rotation index applied: slot 0 is GB, 1 is GBC. GBA has no set, and a
+        // card with no art clears the overlay — either way the built-in look stands. The
+        // frontend mints the GL texture when it next sees `overlay_dirty`.
+        let (which, slot) = match system {
+            System::Gb => ("gb", 0),
+            System::Gbc => ("gbc", 1),
+            System::Gba => ("", 0),
+        };
+        let list = if which.is_empty() {
+            Vec::new()
+        } else {
+            crate::root::overlay_files(&self.root, which)
+        };
+        // Say what the card actually offered. Art the scanner did not take — a name it does not
+        // recognise — is otherwise invisible: the device has no console, and the overlay leaves
+        // no other trace anywhere on screen or off.
+        if !which.is_empty() {
+            let names: Vec<String> = list
+                .iter()
+                .map(|o| {
+                    format!(
+                        "{}{}",
+                        o.path.file_name().unwrap_or_default().to_string_lossy(),
+                        if o.reflect { " (reflect)" } else { "" }
+                    )
+                })
+                .collect();
+            eprintln!(
+                "slot: overlay {which}: {} file(s): {}",
+                list.len(),
+                if names.is_empty() {
+                    "(none - check Overlay/ naming)".to_string()
+                } else {
+                    names.join(", ")
+                }
+            );
+        }
+        self.app.set_overlay_set(list, slot);
     }
 
     /// (Re)send the current cheat list to the core, each code's enabled ANDed with the master

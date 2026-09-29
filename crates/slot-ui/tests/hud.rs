@@ -6,14 +6,14 @@ use slot_ui::{
 fn top_edge(d: &Draw) -> Option<f32> {
     match *d {
         Draw::Rect { y, .. } | Draw::Tex { y, .. } | Draw::Turned { y, .. } => Some(y),
-        Draw::Game | Draw::Shot { .. } => None,
+        Draw::Game | Draw::Glow | Draw::Shot { .. } => None,
     }
 }
 
 fn bottom_edge(d: &Draw) -> Option<f32> {
     match *d {
         Draw::Rect { y, h, .. } | Draw::Tex { y, h, .. } | Draw::Turned { y, h, .. } => Some(y + h),
-        Draw::Game | Draw::Shot { .. } => None,
+        Draw::Game | Draw::Glow | Draw::Shot { .. } => None,
     }
 }
 

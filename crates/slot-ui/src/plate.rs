@@ -48,14 +48,28 @@ fn ink() -> [u8; 3] {
 const KEY_PX: f32 = 14.0;
 const LABEL_PX: f32 = 16.0;
 const LABEL_MIN_PX: f32 = 10.0;
-/// The clock's own size, and the reason it is not just `word_face`'s.
+/// The status row's own band height: the clock and the battery's percent share it.
 ///
-/// `word_face` is what the battery's percent is set in as well, and the two sit at opposite ends
-/// of the same row: the time is the thing the eye goes to the band for and was asked to grow, the
-/// percent is a value beside an icon it belongs to and was not. One constant cannot be both, so
-/// the clock gets its own — four pixels up, and the same face otherwise.
-const CLOCK_PX: f32 = 20.0;
+/// The two readings are set at `CLOCK_PX`/`PCT_PX`, sized so the face's own line box fits inside
+/// this band. `text::coverage` places the baseline from the box's height and the face's own line
+/// metrics, and then its bounds check simply *drops* any ink past the edge — so a font too large
+/// for the band loses the bottom of its digits rather than shrinking to fit. `text::fit` has an
+/// opinion about width only, and none at all about height.
+///
+/// Only the **box** is this tall. Where the ink lands inside it is decided by the face's own line
+/// metrics (`text::coverage`).
+pub const STATUS_H: u32 = 20;
+
+/// The clock's size. Set to sit inside the `STATUS_H` band: twenty-four keeps the baseline just
+/// inside the box's bottom, where thirty pushed it past and clipped the digits' lower edge.
+const CLOCK_PX: f32 = 24.0;
 const CLOCK_MIN_PX: f32 = 12.0;
+
+/// The battery's percent, set at the clock's own size: they are the two readings on the status
+/// row and were asked to grow together. Its own pair rather than a share of `LABEL_PX`, which
+/// belongs to hint labels and must stay where the legends were measured.
+const PCT_PX: f32 = 24.0;
+const PCT_MIN_PX: f32 = 12.0;
 const TITLE_PX: f32 = 20.0;
 const TITLE_MIN_PX: f32 = 12.0;
 
@@ -155,34 +169,42 @@ pub fn hint_face(key: &str, label: &str) -> UndoFace {
 /// The same type as a hint's label, with no key cap in front of it. What the shelf prints on
 /// the case: the wordmark and the time, in the font the buttons are labelled in.
 pub fn word_width(text: &str) -> u32 {
-    band_width_at(text, LABEL_PX, LABEL_MIN_PX)
+    band_width_at(text, PCT_PX, PCT_MIN_PX)
 }
 
+/// The battery's percent. Named `word_*` for history and now the only caller; it is set at
+/// `PCT_PX` in a `STATUS_H` band, so it and the clock are the same size in the same box.
 pub fn word_face(text: &str) -> UndoFace {
     let w = word_width(text);
-    let mut rgba = vec![0u8; (w * HINT_H * 4) as usize];
+    let mut rgba = vec![0u8; (w * STATUS_H * 4) as usize];
     if let Some(font) = text::label_font() {
-        let layout = text::fit(font, text, w as f32, 1, LABEL_PX, LABEL_MIN_PX);
-        text::draw_centred(&mut rgba, w, HINT_H, &layout, ink());
+        let layout = text::fit(font, text, w as f32, 1, PCT_PX, PCT_MIN_PX);
+        text::draw_centred(&mut rgba, w, STATUS_H, &layout, ink());
     }
-    UndoFace { rgba, w, h: HINT_H }
+    UndoFace {
+        rgba,
+        w,
+        h: STATUS_H,
+    }
 }
 
-/// The time, at its own size. Same face, same band height, same ink as `word_face` — only the
-/// size differs, and it differs because the clock is the one reading on the band the eye goes to
-/// on purpose rather than a value hanging off an icon.
+/// The time. Same face and same band as the battery's percent — the two halves of one status row.
 pub fn clock_width(text: &str) -> u32 {
     band_width_at(text, CLOCK_PX, CLOCK_MIN_PX)
 }
 
 pub fn clock_face(text: &str) -> UndoFace {
     let w = clock_width(text);
-    let mut rgba = vec![0u8; (w * HINT_H * 4) as usize];
+    let mut rgba = vec![0u8; (w * STATUS_H * 4) as usize];
     if let Some(font) = text::label_font() {
         let layout = text::fit(font, text, w as f32, 1, CLOCK_PX, CLOCK_MIN_PX);
-        text::draw_centred(&mut rgba, w, HINT_H, &layout, ink());
+        text::draw_centred(&mut rgba, w, STATUS_H, &layout, ink());
     }
-    UndoFace { rgba, w, h: HINT_H }
+    UndoFace {
+        rgba,
+        w,
+        h: STATUS_H,
+    }
 }
 
 /// A hint's slot is held whether or not its face arrived, for the same reason a cart with no
@@ -243,6 +265,31 @@ pub fn title_face(text: &str) -> UndoFace {
         w: TITLE_W,
         h: TITLE_H,
     }
+}
+
+/// One line of the direct-connect dialog's own type. Its own builder rather than a share of a
+/// screen's, because the dialog is a screen of its own and asks for sizes (36/24) nothing else
+/// prints at. The box is twice the type's height so the font's own line box fits rather than being
+/// clipped — `text::coverage` drops ink past the box's edge instead of shrinking it.
+pub fn dialog_line_face(text: &str, px: f32) -> UndoFace {
+    let max_w = 640.0f32;
+    let box_h = (px * 2.0).ceil() as u32;
+    let mut w = 1u32;
+    if let Some(font) = text::label_font() {
+        let layout = text::fit(font, text, max_w, 1, px, px * 0.5);
+        let ink = layout
+            .lines
+            .iter()
+            .map(|l| text::line_width(font, l, layout.px, layout.tracking))
+            .fold(0.0, f32::max);
+        w = (ink.ceil() as u32).clamp(1, max_w as u32);
+    }
+    let mut rgba = vec![0u8; (w * box_h * 4) as usize];
+    if let Some(font) = text::label_font() {
+        let layout = text::fit(font, text, w as f32, 1, px, px * 0.5);
+        text::draw_centred(&mut rgba, w, box_h, &layout, ink());
+    }
+    UndoFace { rgba, w, h: box_h }
 }
 
 /// The shelf's line of type: the game under the eye, for the screen below the row. Cut from

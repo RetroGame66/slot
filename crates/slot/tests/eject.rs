@@ -251,7 +251,8 @@ fn eject_preserves_the_levels() {
             // whole state out, so a field added without them is a build error — which is how
             // this one was found.
             mode: Mode::Dark,
-        },
+        
+        favorites: Default::default(),},
     )
     .unwrap();
     eject(d.path(), Core::Mgba, "Emerald", Some(&[0u8; 8]), None).unwrap();

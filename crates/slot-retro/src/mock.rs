@@ -132,6 +132,8 @@ impl RetroCore for MockCore {
         AvInfo {
             fps: FPS,
             sample_rate: SAMPLE_RATE,
+            width: GBA_W,
+            height: GBA_H,
         }
     }
 }

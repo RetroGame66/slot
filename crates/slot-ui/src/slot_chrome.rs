@@ -4,7 +4,7 @@ use slot_gfx::{Draw, TexId, OUT_H, OUT_W};
 use slot_store::Cart;
 use slot_store::Theme;
 
-use crate::cart::{label_colour, label_text, CART_H, CART_W};
+use crate::cart::{label_colour, label_text, size_for, CART_W};
 use crate::icon::icon_box;
 use crate::palette;
 use crate::shelf::CENTER_SCALE;
@@ -110,20 +110,21 @@ pub fn recess() -> [f32; 4] {
 
 const LIP_Y: f32 = BAND_Y;
 
-/// Where a cart stands before it is pushed in. Same place the shelf draws the selected cart,
-/// so the handoff out of the shelf is not a jump.
-const REST_Y: f32 = (OUT_H - CART_H) as f32 / 2.0;
+/// How far a Game Boy or Game Boy Color cart goes into an Advance slot before it stops. The
+/// slot is shallow and the cart is tall, so it goes in and then stands there rather than being
+/// swallowed: 184 px of travel, against the Advance cart's 255.
+///
+/// Two fifths of the shell, measured against the plastic rather than against the travel: the
+/// bay's front edge cuts the cart off at y 424, and the cart stands at y 102, so 212 px in
+/// leaves 424 - (102 + 212) = 110 px out of 276 showing — 39.9%.
+const GB_INSET: f32 = 212.0;
 
-/// Where the cart stops. In means *in*, not gone: it comes to rest filling the opening, so
-/// the base of the slot is covered by the cart rather than going dark again. Four pixels
+/// Where an Advance cart stops. In means *in*, not gone: it comes to rest filling the opening,
+/// so the base of the slot is covered by the cart rather than going dark again. Four pixels
 /// below the top of the recess, which leaves the far wall showing above the cart's rounded
-/// top edge instead of butting it flat against the lip.
+/// top edge instead of butting it flat against the lip. A Game Boy cart stops higher up — see
+/// `draw`, which derives the rest and the catch from the cart's own size.
 const SEATED_Y: f32 = BAY_Y + 4.0;
-const CART_X: f32 = (OUT_W - CART_W) as f32 / 2.0;
-
-/// How far into the travel the cart's bottom edge reaches the lip. Derived rather than
-/// tuned, because it is where the catch has to be to read as one.
-const CATCH_AT: f32 = (LIP_Y - CART_H as f32 - REST_Y) / (SEATED_Y - REST_Y);
 /// The seat either side of the catch. It opens a little before halfway because the cart is
 /// resting on the lip for the whole of it, and the push comes after.
 const CATCH_IN: f32 = 0.42;
@@ -182,11 +183,35 @@ impl SlotChrome<'_> {
         // carries has to push it *up*. Centring it instead lets the extra height out both ways
         // and the cart drops by half of it the moment the insert starts — a jump of its own,
         // which is the thing scaling it here was meant to avoid.
-        let cart_scale = CENTER_SCALE + (1.0 - CENTER_SCALE) * seat;
-        let cart_w = CART_W as f32 * cart_scale;
-        let cart_h = CART_H as f32 * cart_scale;
-        let x = CART_X + (CART_W as f32 - cart_w) / 2.0;
-        let y = REST_Y + (SEATED_Y - REST_Y) * travel(seat) + (CART_H as f32 - cart_h);
+        // The cart's own geometry, which is its machine's: an Advance cart is landscape and a
+        // Game Boy cart portrait, and the two are not the same object going into the same slot.
+        let size = size_for(self.cart.system());
+        let (w0, h0) = (size.w as f32, size.h as f32);
+        let cart_x = (OUT_W as f32 - w0) / 2.0;
+        let rest_y = (OUT_H as f32 - h0) / 2.0;
+        // Where it stops. An Advance cart is swallowed to the top of the recess. A Game Boy or
+        // Game Boy Color cart cannot be: the slot is not deep enough to take one, and in a real
+        // Advance it stands half out with its label still readable. So its foot comes to rest
+        // halfway down the recess rather than at the bottom of it — a Game Boy cart in an
+        // Advance slot is half in and stays half out, on the shelf and in the machine alike.
+        let seated_y = match self.cart.system() {
+            slot_store::System::Gba => SEATED_Y,
+            _ => rest_y + GB_INSET,
+        };
+        // The Advance cart eases out of the size the row showed it at. A portrait cart is never
+        // drawn enlarged — the row shows it at its own size — so there is nothing to ease out
+        // of and it comes down at that size for the whole of the travel.
+        let cart_scale = match self.cart.system() {
+            slot_store::System::Gba => CENTER_SCALE + (1.0 - CENTER_SCALE) * seat,
+            _ => 1.0,
+        };
+        // How far into the travel its bottom edge reaches the lip. Derived per cart, since it
+        // depends on how far that cart has to fall.
+        let catch_at = ((LIP_Y - h0 - rest_y) / (seated_y - rest_y).max(1.0)).clamp(0.05, 0.95);
+        let cart_w = w0 * cart_scale;
+        let cart_h = h0 * cart_scale;
+        let x = cart_x + (w0 - cart_w) / 2.0;
+        let y = rest_y + (seated_y - rest_y) * travel(seat, catch_at) + (h0 - cart_h);
         // The cart fades with the case rather than through it. A seated cart is really in the
         // slot and has to be drawn, so the whole device face has to leave as one object as the
         // picture takes over. Held at full while the screen is off, which is all of the travel.
@@ -467,13 +492,13 @@ pub fn draw_empty_slot(out: &mut Vec<Draw>) {
 /// The travel, in three parts: the cart falls to the lip, rests on it, then is pushed
 /// through and settles. A single ease covers the same ground but arrives seated without ever
 /// having met anything, which is what makes it read as a card going down a chute.
-fn travel(seat: f32) -> f32 {
+fn travel(seat: f32, catch_at: f32) -> f32 {
     if seat < CATCH_IN {
-        CATCH_AT * ease(seat / CATCH_IN)
+        catch_at * ease(seat / CATCH_IN)
     } else if seat < CATCH_OUT {
-        CATCH_AT + CREEP * (seat - CATCH_IN) / (CATCH_OUT - CATCH_IN)
+        catch_at + CREEP * (seat - CATCH_IN) / (CATCH_OUT - CATCH_IN)
     } else {
-        let caught = CATCH_AT + CREEP;
+        let caught = catch_at + CREEP;
         caught + (1.0 - caught) * ease((seat - CATCH_OUT) / (1.0 - CATCH_OUT))
     }
 }

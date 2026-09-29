@@ -50,15 +50,16 @@ pub trait Snapshot {
 pub fn flush(
     root: &Path,
     core: Core,
+    system: slot_store::System,
     stem: &str,
     state: Option<&[u8]>,
     sav: Option<&[u8]>,
 ) -> std::io::Result<()> {
     if let Some(state) = state {
-        StateRing::new(root, core, stem).write_resume(state)?;
+        StateRing::new(root, core, system, stem).write_resume(state)?;
     }
     if let Some(sav) = sav {
-        write_sav(root, stem, sav)?;
+        write_sav(root, system, stem, sav)?;
     }
     Ok(())
 }
@@ -72,11 +73,12 @@ pub fn flush(
 pub fn eject(
     root: &Path,
     core: Core,
+    system: slot_store::System,
     stem: &str,
     state: Option<&[u8]>,
     sav: Option<&[u8]>,
 ) -> std::io::Result<()> {
-    flush(root, core, stem, state, sav)?;
+    flush(root, core, system, stem, state, sav)?;
     let mut slot = read_slot_state(root);
     slot.cart = None;
     write_slot_state(root, &slot)
@@ -112,9 +114,14 @@ pub fn eject(
 /// `.sav` directly would find nothing there, wave a smaller write through unguarded, and that
 /// new `.sav` would then shadow the larger `.srm` on every read after — this is the exact
 /// loss shape the guard above exists to stop, just reached from the one path it could not see.
-pub fn write_sav(root: &Path, stem: &str, sav: &[u8]) -> std::io::Result<bool> {
-    let path = sav_path(root, stem);
-    let old = read_sav(root, stem);
+pub fn write_sav(
+    root: &Path,
+    system: slot_store::System,
+    stem: &str,
+    sav: &[u8],
+) -> std::io::Result<bool> {
+    let path = sav_path(root, system, stem);
+    let old = read_sav(root, system, stem);
     let dropped = old
         .as_deref()
         .map_or(&[][..], |o| &o[sav.len().min(o.len())..]);
@@ -131,7 +138,7 @@ pub fn write_sav(root: &Path, stem: &str, sav: &[u8]) -> std::io::Result<bool> {
         // stop saving -- which is what it used to be, for good, on any card that had been
         // played under gpSP (it answers 131072 for every cart).
         SavePlan::BackupAndWrite => {
-            let from = found_sav_path(root, stem);
+            let from = found_sav_path(root, system, stem);
             let to = backup_path(&from);
             match std::fs::rename(&from, &to) {
                 Ok(()) => eprintln!(
@@ -160,7 +167,7 @@ pub fn write_sav(root: &Path, stem: &str, sav: &[u8]) -> std::io::Result<bool> {
             eprintln!(
                 "slot: save ram: refusing to shrink {} from {} to {} bytes -- what would be \
                  dropped holds {}",
-                found_sav_path(root, stem).display(),
+                found_sav_path(root, system, stem).display(),
                 old.as_deref().map_or(0, <[u8]>::len),
                 sav.len(),
                 describe(dropped)
@@ -171,7 +178,7 @@ pub fn write_sav(root: &Path, stem: &str, sav: &[u8]) -> std::io::Result<bool> {
             eprintln!(
                 "slot: save ram: refusing to overwrite the compressed RetroArch save {} \
                  (turn off RetroArch's save-file compression and re-export it)",
-                found_sav_path(root, stem).display()
+                found_sav_path(root, system, stem).display()
             );
             return Ok(false);
         }
@@ -186,9 +193,15 @@ pub fn write_sav(root: &Path, stem: &str, sav: &[u8]) -> std::io::Result<bool> {
 /// mGBA standalone writes `.sav`, RetroArch's libretro cores write `.srm`. Both are the
 /// same battery bytes, so a card carrying either has a real save on it. Only `.sav` is ever
 /// written, which makes it the newer of the two whenever both exist.
-pub fn read_sav(root: &Path, stem: &str) -> Option<Vec<u8>> {
-    std::fs::read(sav_path(root, stem))
-        .or_else(|_| std::fs::read(crate::root::saves_dir(root).join(format!("{stem}.srm"))))
+pub fn read_sav(root: &Path, system: slot_store::System, stem: &str) -> Option<Vec<u8>> {
+    let dir = crate::root::saves_dir(root, system);
+    std::fs::read(dir.join(format!("{stem}.sav")))
+        .or_else(|_| std::fs::read(dir.join(format!("{stem}.srm"))))
+        // A card that has not been sorted into machine folders yet keeps its saves where they have
+        // always been (`Saves/<stem>.sav`). Read before the machine folder can answer, never
+        // written to, so adding GB/GBC support does not orphan the saves a GBA card already has.
+        .or_else(|_| std::fs::read(root.join("Saves").join(format!("{stem}.sav"))))
+        .or_else(|_| std::fs::read(root.join("Saves").join(format!("{stem}.srm"))))
         .ok()
 }
 
@@ -200,13 +213,13 @@ pub fn read_sav(root: &Path, stem: &str) -> Option<Vec<u8>> {
 /// rather than as a missing one. Loading nothing gives it a fresh save it can then write over,
 /// and it is the same answer the write side gives when it leaves the file alone -- so a card
 /// with a compressed save on it neither loses the file nor pretends to use it.
-pub fn load_sav(root: &Path, stem: &str) -> Option<Vec<u8>> {
-    let data = read_sav(root, stem)?;
+pub fn load_sav(root: &Path, system: slot_store::System, stem: &str) -> Option<Vec<u8>> {
+    let data = read_sav(root, system, stem)?;
     if is_rzip(&data) {
         eprintln!(
             "slot: save ram: {} is a compressed RetroArch save; loading nothing rather than \
              feeding its rzip bytes to the core",
-            found_sav_path(root, stem).display()
+            found_sav_path(root, system, stem).display()
         );
         return None;
     }
@@ -245,17 +258,20 @@ fn backup_path(from: &Path) -> PathBuf {
 /// Which of the two files this cart's save actually lives in. `read_sav` prefers `.sav` and
 /// falls back to `.srm`, so a message that always names `.sav` sends the player to a file that
 /// is not the one being talked about.
-fn found_sav_path(root: &Path, stem: &str) -> PathBuf {
-    let sav = sav_path(root, stem);
-    if sav.exists() {
-        return sav;
+fn found_sav_path(root: &Path, system: slot_store::System, stem: &str) -> PathBuf {
+    let dir = crate::root::saves_dir(root, system);
+    let flat = root.join("Saves");
+    for p in [
+        dir.join(format!("{stem}.sav")),
+        dir.join(format!("{stem}.srm")),
+        flat.join(format!("{stem}.sav")),
+        flat.join(format!("{stem}.srm")),
+    ] {
+        if p.exists() {
+            return p;
+        }
     }
-    let srm = crate::root::saves_dir(root).join(format!("{stem}.srm"));
-    if srm.exists() {
-        srm
-    } else {
-        sav
-    }
+    sav_path(root, system, stem)
 }
 
 /// The counterpart to the resume write in `flush`. Without this the cart is seated on the
@@ -268,13 +284,26 @@ fn found_sav_path(root: &Path, stem: &str) -> PathBuf {
 /// and `open_core`, which is what keeps the resume directory and the dylib from disagreeing
 /// at that moment. It says nothing about later: `flush` and eject read the core `App` stored
 /// from that same resolution rather than asking again, which is what keeps them agreeing too.
-pub fn read_resume(root: &Path, core: Core, stem: &str) -> Option<Vec<u8>> {
-    StateRing::new(root, core, stem)
+pub fn read_resume(
+    root: &Path,
+    core: Core,
+    system: slot_store::System,
+    stem: &str,
+) -> Option<Vec<u8>> {
+    StateRing::new(root, core, system, stem)
         .read_resume()
         .ok()
         .flatten()
+        .or_else(|| {
+            // A card not yet sorted into machine folders keeps its states where they have always
+            // been; the resume is the one of the two a player notices, so it is read back too.
+            StateRing::legacy(root, core, stem)
+                .read_resume()
+                .ok()
+                .flatten()
+        })
 }
 
-fn sav_path(root: &Path, stem: &str) -> PathBuf {
-    crate::root::saves_dir(root).join(format!("{stem}.sav"))
+fn sav_path(root: &Path, system: slot_store::System, stem: &str) -> PathBuf {
+    crate::root::saves_dir(root, system).join(format!("{stem}.sav"))
 }

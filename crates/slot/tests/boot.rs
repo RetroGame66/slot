@@ -116,6 +116,7 @@ fn seating_a_cart_preserves_the_levels_already_in_the_file() {
             // whole state out, so a field added without them is a build error — which is how
             // this one was found.
             mode: Mode::Dark,
+            favorites: std::collections::BTreeSet::new(),
         },
     )
     .unwrap();

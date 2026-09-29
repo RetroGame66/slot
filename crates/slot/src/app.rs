@@ -1,19 +1,19 @@
 use std::path::{Path, PathBuf};
 
-use slot_gfx::{OUT_H, OUT_W};
+use slot_gfx::{System as ScreenSystem, OUT_H, OUT_W};
 use slot_input::{Action, Btn, MUTE_CHORD_MS};
 use slot_power::{Battery, Charge, LedState, LidPolicy, Power};
 use slot_retro::LinkChannel;
 use slot_store::{
     format_stamp, read_slot_state, scan_cached, write_slot_state, Cart, Core, SlotState,
-    StateEntry, StateRing, Theme, BLUE_LIGHT_MAX, BRIGHTNESS_MAX, RING_MAX, VOLUME_MAX,
+    StateEntry, StateRing, System, Theme, BLUE_LIGHT_MAX, BRIGHTNESS_MAX, RING_MAX, VOLUME_MAX,
 };
 use slot_ui::lang;
 use slot_ui::{
     board_at, board_zoom, draw_backdrop, draw_edge_glow, draw_empty_slot, draw_shortcut_row,
     draw_status, draw_sticker_at, draw_top_band, ease, grown, letters, lid_at, lift_of, on_board,
     ClockPicker, Draw, FfState, Hud, HudKind, Icon, Letters, Millis, Placed, Polaroids,
-    PowerChoice, Refusal, Shelf, SlotChrome, TexId, Toast, BOARD_W, BOARD_X, CART_H, CART_W,
+    PowerChoice, Refusal, Shelf, SlotChrome, TexId, Toast, BOARD_W, BOARD_X, CART_W,
     CHIP_H, CHIP_U, CHIP_V, CHIP_W, HINT_EDGE, HINT_H, HOP_LIFT, MOUTH_H, PLATE_Y, SHADOW_H,
     SHADOW_W, SHELF_TITLE_H, SOCKET_H, SOCKET_U, SOCKET_V, SOCKET_W, STICKER_H, TURN_PAD,
 };
@@ -304,11 +304,6 @@ pub enum Phase {
 /// Where the shelf's line of type sits: centred in the gap between the row's own foot and
 /// the top of the case. Derived rather than picked, so moving either end — a taller cart, a
 /// deeper bay — carries it along instead of leaving it behind.
-const SHELF_TITLE_Y: f32 = {
-    let foot = (OUT_H + CART_H) as f32 / 2.0;
-    let case = OUT_H as f32 - MOUTH_H;
-    (foot + case) / 2.0 - SHELF_TITLE_H as f32 / 2.0
-};
 
 /// How many carts fall under each slot of the letter ring, in `letters::SLOTS` order.
 ///
@@ -405,8 +400,25 @@ struct DisplayFilter {
     /// costs nothing here.
     nocolor_cc: [[f32; 3]; 3],
     mask_mode: u8,
-    cc_mode: u8,
+    /// One colour-correction choice per machine, in `MACHINE_SLOTS` order (GBA, GB, GBC).
+    ///
+    /// Per machine because the three machines want different *kinds* of correction and there is
+    /// no sensible shared index into them. A Game Boy is a greyscale machine: saturation is
+    /// meaningless on it, and what its four shades are tinted with is the whole question — DMG
+    /// green, Pocket grey, Light cyan. A Game Boy Color and an Advance are colour machines,
+    /// where saturation and a backlight tint both mean something. One number shared between them
+    /// would have to mean "entry 3 of whichever list", which is exactly the kind of thing that
+    /// reads fine until someone cycles it on the wrong shelf.
+    ///
+    /// `u16` rather than `u8` because the Game Boy's slot is an index into the whole palette
+    /// table, which is past 255 entries and will only grow. The two colour machines' slots still
+    /// hold 0..=6; the width is shared because the three are read as one array.
+    cc: [u16; 3],
 }
+
+/// How many machines have their own shelf and their own colour correction. The three the
+/// device ships with; `machine_slot` is the mapping and it is the only one.
+const MACHINE_SLOTS: usize = 3;
 impl DisplayFilter {
     const IDENTITY: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
     // NOCOLOR grayscale (0% saturation): plain luma. The whole picture collapses to its luma
@@ -464,6 +476,107 @@ impl DisplayFilter {
         [0.0679, 0.1333, 0.0259],
         [0.1476, 0.2898, 0.0563],
     ];
+    /// Which shelf a machine's colour choice lives on.
+    const fn machine_slot(s: System) -> usize {
+        match s {
+            System::Gba => 0,
+            System::Gb => 1,
+            System::Gbc => 2,
+        }
+    }
+
+    /// How many colour-correction entries the colour machines have — the seven above.
+    pub const CC_COUNT: u16 = 7;
+    /// How many the Game Boy has: the whole palette table, which is every PixelShift and TWB64
+    /// entry the core ships plus the two house looks in front of them. See `crate::palettes`.
+    pub const GB_CC_COUNT: u16 = crate::palettes::GB_PALETTES.len() as u16;
+
+    /// The Game Boy's palettes — the whole table, as `(name, four shades)` — live in
+    /// `crate::palettes`, generated from gambatte's own `gbcpalettes.h`.
+    ///
+    /// The table is four shades rather than a matrix, because four shades is what the machine
+    /// has. A 3x3 multiply can only slope between one white point and one black point: it can
+    /// tint, and it cannot follow a palette whose middles sit off that line. `Sunburst` runs pale
+    /// green -> yellow -> orange -> red, and a two-point map draws a straight line from one end to
+    /// the other and loses both of the middle colours. `gb_lut` turns a table like this into a
+    /// per-shade map instead, and the shader looks it up.
+    ///
+    /// Entry 0 原生灰 is the core's own output, untouched — and it is deliberately *not* routed
+    /// through the lookup, so the machine's neutral look costs nothing.
+
+    /// The three Game Boy models — the screen art **and** the four shades behind it — live in
+    /// `crate::palettes::GB_MODELS`.
+    ///
+    /// They are not entries in the palette table, and that is the whole of what "bound" means:
+    /// each model's four shades were drawn as the other half of its screen art, so the choice is
+    /// made once, by choosing the art. Letting them in as palettes as well would be two ways to
+    /// land on one look.
+    ///
+    /// How many of a Game Boy's overlay choices are models: they come first, so a card that ships
+    /// the three masks opens on the DMG.
+    pub const GB_MODEL_COUNT: usize = 3;
+
+    /// How much of the lattice colour is mixed into the dots: half.
+    ///
+    /// The geometry is the shader's — the right column and bottom row of every 3x3 source pixel,
+    /// 5 of its 9 — and at that coverage the mesh is much heavier than the old aperture table
+    /// ever was, so this is the one number that decides whether the picture survives it. Tried
+    /// at 35% and set back to 50% on the device; it is a taste dial and nothing else depends
+    /// on the value.
+    pub const GB_GRID_MIX: f32 = 0.5;
+
+    /// The palette's own name is not a second array beside the table: each entry of
+    /// `crate::palettes::GB_PALETTES` is `(name, four shades)`, so a name cannot drift from the
+    /// colours it names. `display_palette_name` is the accessor.
+
+    /// Where the four shades sit in the greys the core hands over. Not evenly spaced: mGBA's
+    /// greyscale is its own four levels (RGB555 `0x7FFF / 0x56B5 / 0x294A / 0x0000`, which is
+    /// 255 / 173 / 82 / 0 once widened), and the lookup has to put each shade's colour *on* its
+    /// level rather than on an idealised third of the range.
+    const GB_SHADE_LEVELS: [u8; 4] = [255, 173, 82, 0];
+
+    /// Turn four shades into a 256-entry RGBA lookup, so the shader can be exact.
+    ///
+    /// Every grey the machine can hand over gets a colour, interpolated between the two shades
+    /// either side of it. Interpolating matters even though a Game Boy only draws four levels:
+    /// the reflection pass feeds this a *blurred* frame, which is continuous, and a lookup that
+    /// only knew about four values would posterise the glow around the screen.
+    ///
+    /// Built in encoded space, the space the panels are described in, so a shade lands on its
+    /// own colour exactly rather than a gamma away from it.
+    ///
+    /// Takes the shades themselves rather than an index into the table: the table's entries and
+    /// the three models' four shades are the same kind of thing here, and only one of the two has
+    /// an index at all.
+    fn gb_lut(pal: [[u8; 3]; 4]) -> [u8; 1024] {
+        let lv = Self::GB_SHADE_LEVELS;
+        let mut lut = [0u8; 1024];
+        for g in 0..256u32 {
+            // Find the pair of shades this grey falls between. `lv` runs bright to dark and `g`
+            // runs dark to bright, so the search walks the other way.
+            let mut lo = 0;
+            while lo < 3 && (g as u8) < lv[lo + 1] {
+                lo += 1;
+            }
+            // Between lv[lo] (brighter) and lv[lo + 1] (darker).
+            let (hi_lv, lo_lv) = (lv[lo] as u32, lv[(lo + 1).min(3)] as u32);
+            let t = if hi_lv == lo_lv {
+                0
+            } else {
+                ((hi_lv - g) * 255 / (hi_lv - lo_lv)).min(255)
+            };
+            let a = pal[lo];
+            let b = pal[(lo + 1).min(3)];
+            let i = (g * 4) as usize;
+            for c in 0..3 {
+                let (x, y) = (a[c] as u32, b[c] as u32);
+                lut[i + c] = ((x * (255 - t) + y * t + 127) / 255) as u8;
+            }
+            lut[i + 3] = 255;
+        }
+        lut
+    }
+
     /// The neutral aperture the LCD3x modes sit between: an everywhere-white table, so OFF is a
     /// clean framebuffer and the two LCD3x steps are the grid at half and full strength.
     const FLAT_MASK: [[[u8; 3]; 3]; 3] = [[[255u8; 3]; 3]; 3];
@@ -473,18 +586,29 @@ impl DisplayFilter {
     fn new(
         lcd3x: [[[u8; 3]; 3]; 3],
         nocolor_cc: [[f32; 3]; 3],
-        (mask_mode, cc_mode): (u8, u8),
+        mask_mode: u8,
+        cc: [u16; 3],
     ) -> Self {
         Self {
             lcd3x,
             nocolor_cc,
             mask_mode: mask_mode.min(4),
-            cc_mode: cc_mode.min(6),
+            cc: [
+                cc[0].min(Self::CC_COUNT - 1),
+                cc[1].min(Self::GB_CC_COUNT - 1),
+                cc[2].min(Self::CC_COUNT - 1),
+            ],
         }
     }
     /// Mask rides on top of the picture: 0 is clear, 1 the LCD3x grid at 50%, 2 at full strength,
     /// 3 the scanline overlay at 50%, 4 at full strength.
-    fn applied_mask(&self) -> [[[u8; 3]; 3]; 3] {
+    fn applied_mask(&self, flat: bool) -> [[[u8; 3]; 3]; 3] {
+        // A Game Boy's lattice is not a table any more: it is drawn from the palette in the game
+        // shader (see `GB_GRID_MIX`), which is what makes it follow the four shades. The aperture
+        // here is therefore neutral, and the mesh and the picture are made of the same colours.
+        if flat {
+            return Self::FLAT_MASK;
+        }
         match self.mask_mode {
             0 => Self::FLAT_MASK,
             1 => lerp_mask(&Self::FLAT_MASK, &self.lcd3x, 0.5),
@@ -493,10 +617,21 @@ impl DisplayFilter {
             _ => Self::SCANLINE_MASK,
         }
     }
-    /// Colour correction rides under the mask; mode 0 is identity, 1 the HALFCOLOR grade, 2 the
-    /// NOCOLOR luma, 3 DMG green backlight, 4 ice-blue, 5 amber, 6 pink.
-    fn applied_cc(&self) -> [[f32; 3]; 3] {
-        match self.cc_mode {
+    /// Colour correction rides under the mask, and what it *is* depends on the machine.
+    ///
+    /// A Game Boy gets a palette: see `gb_cc`, whose black point is the reason this returns a
+    /// bias at all. The colour machines keep the list they had — 0 identity, 1 the HALFCOLOR
+    /// grade, 2 the NOCOLOR luma, 3 DMG green backlight, 4 ice-blue, 5 amber, 6 pink — all of
+    /// them anchored on black, so their bias is the zero vector and their picture is bit for bit
+    /// what it was before this pair existed.
+    fn applied_cc(&self, machine: System) -> ([[f32; 3]; 3], [f32; 3]) {
+        let mode = self.cc[Self::machine_slot(machine)];
+        if machine == System::Gb {
+            // A Game Boy is drawn by its palette lookup, not by a matrix: see `gb_lut`. The
+            // matrix path stays identity so nothing double-applies when the lookup is on.
+            return (Self::IDENTITY, [0.0, 0.0, 0.0]);
+        }
+        let m = match mode {
             0 => Self::IDENTITY,
             1 => Self::HALF_CC,
             2 => self.nocolor_cc,
@@ -505,13 +640,45 @@ impl DisplayFilter {
             5 => Self::AMBER_CC,
             6 => Self::PINK_CC,
             _ => Self::PINK_CC,
+        };
+        (m, [0.0, 0.0, 0.0])
+    }
+    /// The signature colour of a tinted-backlight mode (3..=6) as sRGB 0..1 — the colour the
+    /// matrix drives the picture's white to, which is also the tone the four modes are named
+    /// after (see the peak colours on `DMG_GREEN_CC` and friends). Used to fill the letterbox
+    /// around a GB screen so the whole panel reads as one tinted surface. `None` for the modes
+    /// with no single colour — FULLCOLOR, HALFCOLOR, NOCOLOR — which keep the black surround.
+    fn cc_border(&self, machine: System) -> Option<[f32; 3]> {
+        // A Game Boy palette leaves the surround black. The tempting move is the palette's own
+        // lightest shade, and for DMG green that is right — it is how the tinted-backlight modes
+        // above behave. For the Pocket it is near-white and for the Light it is a bright cyan,
+        // and a wall of that around a 160x144 picture at night is not what either machine looked
+        // like: what surrounded a Pocket's LCD was its own grey case, in shadow. Black is the
+        // honest answer for all four, and the picture inside is the palette.
+        if machine == System::Gb {
+            return None;
         }
+        let c = match self.cc[Self::machine_slot(machine)] {
+            3 => [155.0, 188.0, 15.0],
+            4 => [120.0, 170.0, 215.0],
+            5 => [240.0, 165.0, 60.0],
+            6 => [240.0, 130.0, 185.0],
+            _ => return None,
+        };
+        Some([c[0] / 255.0, c[1] / 255.0, c[2] / 255.0])
     }
     fn cycle_mask(&mut self) {
         self.mask_mode = (self.mask_mode + 1) % 5;
     }
-    fn cycle_cc(&mut self) {
-        self.cc_mode = (self.cc_mode + 1) % 7;
+    /// Step the colour correction of one of the **colour** machines, wrapping at the end of its
+    /// list of seven.
+    ///
+    /// A Game Boy never comes through here: its palettes are a table hundreds of entries long
+    /// walked a page at a time, and which page that is belongs to `App`, not to the table of
+    /// seven this struct also holds. `App::cycle_cc` is the fork.
+    fn cycle_cc(&mut self, machine: System) {
+        let slot = Self::machine_slot(machine);
+        self.cc[slot] = (self.cc[slot] + 1) % Self::CC_COUNT;
     }
 }
 
@@ -542,7 +709,65 @@ pub(crate) struct CheatItem {
 
 /// Inset of the shelf's star indicator from the corner of the case. Clear of the cart bay,
 /// which owns the true bottom edge of the screen.
-const FAV_IND_MARGIN: f32 = 10.0;
+
+/// The machine logo in the bottom-left corner — the mirror of the favourites star in the
+/// bottom-right — and the size it is drawn at. Only ever one logo: it *is* the shelf, and it
+/// swaps with it.
+const SHELF_IND_PX: f32 = 22.0;
+const SHELF_IND_MARGIN: f32 = 12.0;
+/// The bottom bar's type badge: what a card's own art is fitted into, and the size the built-in
+/// word is drawn at. The card's art is 150 x 50, so half of it lands in this box exactly.
+const SHELF_IND_W: f32 = 75.0;
+const SHELF_IND_H: f32 = 25.0;
+/// How far in from the panel's left edge the badge sits. Flush was too loud for a mark this
+/// small: it read as a cut-off rather than as a badge.
+const SHELF_IND_LEFT: f32 = 20.0;
+/// How tall the bottom-right favourites indicator is drawn. Enlarged on request, to match the
+/// mark a favourite cart wears.
+const FAV_IND_DRAW: f32 = 36.0;
+/// The top band's own margin: the distance the clock and the battery reading are printed in from
+/// their edges. Repeated here so the two bottom corner marks can stand in the same columns as the
+/// two readings above them.
+const STATUS_READ_MARGIN: f32 = 24.0;
+
+/// The shell that brings WiFi up and starts the SSH server, on demand rather than at boot: the
+/// radio is a real drain on a standby budget, so it is the user who asks for it. `ags-net ssh`
+/// loads `8821cs`, raises `wlan0`, joins from `System/wifi.conf` and starts `dropbear`; the `udhcpc`
+/// after it is the address the firmware's own helper sometimes misses. The address is left in
+/// `/tmp/slot-ip` for the dialog to show, since DHCP is what decides it.
+const DIRECT_ENTER: &str = "sync; export PATH=/usr/sbin:/usr/bin:/sbin:/bin:$PATH; \
+/usr/sbin/ags-net ssh >/dev/null 2>&1; udhcpc -i wlan0 -n -q -t 10 >/dev/null 2>&1; \
+ip -4 -o addr show wlan0 2>/dev/null | tr -s ' ' | cut -d' ' -f4 | cut -d/ -f1 > /tmp/slot-ip; sync";
+
+/// The shell that takes the radio back down: the SSH server, the supplicant and the DHCP client
+/// are killed, `wlan0` dropped and the driver unloaded, which is what makes the drain go away
+/// again. The card is never touched — the whole point of doing this over the network.
+const DIRECT_EXIT: &str = "sync; export PATH=/usr/sbin:/usr/bin:/sbin:/bin:$PATH; \
+pkill dropbear 2>/dev/null; pkill udhcpc 2>/dev/null; \
+wpa_cli -i wlan0 terminate 2>/dev/null; pkill wpa_supplicant 2>/dev/null; \
+ip link set wlan0 down 2>/dev/null; rmmod 8821cs 2>/dev/null; rm -f /tmp/slot-ip; sync";
+
+/// The two beats of a system-shelf swap. The old shelf is drawn up and away over the first,
+/// the new one drops back into place over the second, and the app takes no input for their sum.
+/// Short on purpose: this is a shelf change, not a cutscene.
+const SWITCH_ASCEND_S: f32 = 0.34;
+const SWITCH_DESCEND_S: f32 = 0.34;
+
+/// A system-shelf swap in flight: which shelf is arriving, how far through the two beats it is,
+/// and whether the view has been swapped yet. While `App::shelf_switch` holds one, the app
+/// takes no input and the row is drawn with the swap motion — see `slot_ui::Motion`.
+struct ShelfSwitch {
+    /// The system whose shelf is leaving. Held for the length of the swap so the corner logo can
+    /// cross-dissolve from it rather than cut.
+    from: System,
+    /// The system whose shelf comes up when the ascend beat ends.
+    to: System,
+    /// Seconds since the swap began, across both beats.
+    t: f32,
+    /// Whether the view has been swapped to `to`. The row is the old shelf before it, the new
+    /// one after.
+    swapped: bool,
+}
 
 pub struct App {
     phase: Phase,
@@ -568,14 +793,19 @@ pub struct App {
     /// rather than in the gesture layer because A is the GBA's A button everywhere else, and
     /// `Gestures` is deliberately blind to which screen is up.
     play_held: Option<Millis>,
-    /// When B went down on the shelf, and `None` the rest of the time — the same shape as
-    /// `play_held`, and for the same reason. B carries two shelf gestures, a short press that
+    /// When X went down on the shelf, and `None` the rest of the time — the same shape as
+    /// `play_held`, and for the same reason. X carries two shelf gestures, a short press that
     /// stars the cart and a hold that swaps the shelf, and which one a press is cannot be known
     /// until it either comes up or passes `PLAY_HOLD_MS`.
     fav_held: Option<Millis>,
-    /// The yellow star a favourite wears, with the size it was rasterised at. Its own upload
-    /// rather than one of the HUD's, because it is the one glyph on the shelf that is a colour
-    /// of its own instead of the case's ink.
+    /// When Y went down on the shelf: a hold cycles which machine's shelf is up. Same shape as
+    /// `fav_held`, and spent the same way.
+    sys_held: Option<Millis>,
+    /// When B went down on the shelf: a hold opens the direct-connect dialog. A tap does nothing.
+    mtp_held: Option<Millis>,
+    /// The mark a favourite cart wears, with the size it was rasterised at. One colour whatever
+    /// shelf is up. Its own upload rather than one of the HUD's, because it is the one glyph on the
+    /// shelf that is a colour of its own instead of the case's ink.
     fav_star: Option<(TexId, u32, u32)>,
     /// The shelf's indicator, unlit and lit: the same star hollow while the ordinary shelf is
     /// up and solid while the favourites are.
@@ -603,6 +833,19 @@ pub struct App {
     power_menu: Option<usize>,
     /// One per `PowerChoice::ALL`, in that order, with the size each was rastered at.
     power_menu_faces: Vec<(TexId, u32, u32)>,
+    /// The direct-connect (USB mass-storage) dialog: which stage it is showing, or `None` when it
+    /// is not up. `0` is the confirm prompt, `1` the "connect the cable" beat, `2` the live mode.
+    direct_link: Option<u8>,
+    /// The dialog's lines, baked once at boot: [confirm title, confirm keys, connecting, active
+    /// title, active hint].
+    direct_faces: Vec<(TexId, u32, u32)>,
+    /// When the "connect the cable" beat went up, so it can hand over to the live screen on its own.
+    direct_at: Millis,
+    /// The address the WiFi link came up on, once the connect script has left one.
+    direct_ip: Option<String>,
+    /// The baked face for that address, and whether the address has changed since it was baked.
+    direct_ip_face: Option<(TexId, u32, u32)>,
+    direct_ip_dirty: bool,
     /// The picker while the cart is open, and while its lid is going back on. The cart it acts
     /// on is whichever the shelf has, read when it opens rather than held here: the shelf cannot
     /// move while it is up, so there is only ever one answer.
@@ -740,6 +983,10 @@ pub struct App {
     /// because it is drawn as filled quads. Everything *baked* does not, and this flag is how
     /// the app says so: `Frontend` takes it and re-rasterises.
     mode_dirty: bool,
+    /// A machine shelf has been swapped in, so the row's geometry has moved under the cart art,
+    /// the shadow and the stand-in — all three were minted for the machine the device came up
+    /// on. The frontend takes this and re-cuts them, the way `mode_dirty` re-cuts the furniture.
+    shelf_dirty: bool,
     /// How far up the game layer's own screen is. Not a phase: it outlives the insert, since
     /// the cart is home and the chrome is still on screen while the picture arrives.
     screen: f32,
@@ -773,9 +1020,61 @@ pub struct App {
     last_led: Option<LedState>,
     /// In-game display filter (panel mask + colour correction), cycled with SELECT+X.
     display: DisplayFilter,
+    /// Which page of `palettes::GB_PALETTES` the palette key is walking, and which cell of that
+    /// page the browser has under its caret (`None` while the browser is closed).
+    ///
+    /// The page outlives the browser on purpose: a hold opens the browser, the user turns to the
+    /// page they want and lets go, and the tap walks *that* page. Keeping the two in one place is
+    /// what makes "the page you were last looking at" true — a second copy of it on the browser
+    /// would be a second answer to which fifteen the key is cycling.
+    pal_page: usize,
+    pal_cursor: Option<usize>,
+    /// The highlighted entry's name, as the frontend rasterised it. One name is ever minted:
+    /// fifteen of them would be fifteen lines of type over fifteen blocks of colour.
+    pal_name: Option<(TexId, u32, u32)>,
     /// The audio latency profile, chosen on the shelf with SELECT+VOL. Read from
     /// `System/audio.txt` at boot and written back whenever it changes.
     audio: Profile,
+    /// A per-system screen overlay PNG from the card — `Overlay/GB/GB.png` (plain Game Boy)
+    /// or `Overlay/GBC/GBC.png` (Game Boy Color) — drawn over the live game with its own alpha
+    /// channel, so the user can theme the screen (bezel, dot-matrix grid, tint) without a
+    /// rebuild. `None` = the built-in look. The RGBA is decoded once per insert in
+    /// `Session::spawn_core`; the GL texture is minted lazily by the compositor when
+    /// `overlay_dirty` is set, and released when the next cart has none.
+    overlay_pixels: Option<(Vec<u8>, u32, u32)>,
+    /// The compositor's texture handle for the decoded overlay, or `None` when there is no
+    /// overlay on screen. Only the compositor can mint or drop the GL resource this names.
+    overlay_tex: Option<TexId>,
+    /// Set when `overlay_pixels` changed and the texture must be (re)built or released on the
+    /// next frame. Pushed by `set_overlay`; cleared by the frontend after `sync_overlay`.
+    overlay_dirty: bool,
+    /// Every overlay PNG the seated cart's system offers, in rotation order, and which one is
+    /// up. Built on insert (`Session::spawn_core`) from `Overlay/`; `overlay_next` cycles it.
+    /// Empty for GBA, which has no overlay set.
+    overlay_list: Vec<crate::root::OverlayFile>,
+    /// Which system `overlay_index` counts in: 0 for GB, 1 for GBC. Kept because a Game Boy's
+    /// index counts its three models before the card's own overlays and a Game Boy Color's does
+    /// not, so the same number means different things on the two shelves.
+    overlay_slot: usize,
+    overlay_index: usize,
+    /// Which overlay each system last showed, GB then GBC, persisted to `System/overlay.txt` so
+    /// the choice survives a boot. Clamped against the current list length when it is applied.
+    overlay_indices: [usize; 2],
+    /// Which machine's shelf is up. The row holds only this system's carts; SELECT+L2 cycles it.
+    shelf_system: System,
+    /// Whether the favourites sub-shelf is up within the current system shelf. The whole of what
+    /// the bottom-right star reads, and what the letter strip and letter jumps stand down for —
+    /// a system shelf is still a library with letters, a favourites shelf is not.
+    fav_view: bool,
+    /// The three machine logos drawn in the bottom-left corner, in `GB, GBC, GBA` order, each
+    /// with the size it was rasterised at. The lit one is chosen by `shelf_system`.
+    shelf_ind_faces: Vec<(TexId, u32, u32)>,
+    /// The same three badges for the light theme, which the card draws separately. Held as its
+    /// own set rather than tinted, because a badge is artwork: the two are chosen between by
+    /// the palette's mode, which can change while the device is on.
+    shelf_ind_light: Vec<(TexId, u32, u32)>,
+    /// The system-shelf swap in flight, if any. While it is `Some` the app takes no input.
+    shelf_switch: Option<ShelfSwitch>,
     powering_off: bool,
 }
 
@@ -791,6 +1090,8 @@ impl App {
             letter_ridge_face: None,
             play_held: None,
             fav_held: None,
+            sys_held: None,
+            mtp_held: None,
             fav_star: None,
             fav_ind: None,
             refusal: None,
@@ -800,6 +1101,12 @@ impl App {
             shutdown_faces: Vec::new(),
             power_menu: None,
             power_menu_faces: Vec::new(),
+            direct_link: None,
+            direct_faces: Vec::new(),
+            direct_at: 0,
+            direct_ip: None,
+            direct_ip_face: None,
+            direct_ip_dirty: false,
             core_picker: None,
             core_board_face: None,
             core_lid_face: None,
@@ -846,6 +1153,7 @@ impl App {
             cheat_empty_face: None,
             cheats_dirty: false,
             mode_dirty: false,
+            shelf_dirty: false,
             screen: 0.0,
             game_ready: false,
             clock: 0.0,
@@ -858,11 +1166,29 @@ impl App {
             last_led: None,
             powering_off: false,
             audio: Profile::default(),
+            overlay_pixels: None,
+            overlay_tex: None,
+            overlay_dirty: false,
+            overlay_list: Vec::new(),
+            overlay_slot: 0,
+            overlay_index: 0,
+            overlay_indices: [0, 0],
+            shelf_system: System::Gba,
+            fav_view: false,
+            shelf_ind_faces: Vec::new(),
+            shelf_ind_light: Vec::new(),
+            shelf_switch: None,
             display: DisplayFilter::new(
                 slot_gfx::builtin_panel_mask(),
                 DisplayFilter::DEFAULT_CC,
-                (2, 0),
+                2,
+                [0, 0, 0],
             ),
+            // Page one, browser shut. `App::boot` moves the page onto whatever the card had
+            // chosen, so the first tap of the palette key walks the fifteen around it.
+            pal_page: 0,
+            pal_cursor: None,
+            pal_name: None,
         }
     }
 
@@ -878,6 +1204,12 @@ impl App {
         // Before anything is drawn. The card's palette cannot change while the device is on,
         // so it is read once and never asked for again.
         slot_ui::set_theme(Theme::read(root));
+        // The card's own cart art, if it has any, also read once before the first frame and
+        // before the face builder thread starts. Read once because a cart face is built on that
+        // thread and the art has to be there, whole, by then; and said out loud because a card
+        // whose art was refused — an index-coloured PNG, say — has nothing else to say so.
+        slot_ui::install_cart_art(slot_ui::load_cart_art(root));
+        eprintln!("slot: cart art: {}", slot_ui::cart_art_summary());
         // The cached scan, not the plain one: a boot re-reads only the carts that changed
         // since the last one, which on a card of a few hundred games is the difference
         // between a shelf and a wait. See `slot_store::scan_cached`.
@@ -889,10 +1221,41 @@ impl App {
         // default; the modes fall back to (2, 0) (LCD3X + OFF, the shipped look).
         let lcd3x = crate::root::panel_mask(root).unwrap_or_else(slot_gfx::builtin_panel_mask);
         let nocolor_cc = crate::root::color_correction(root).unwrap_or(DisplayFilter::DEFAULT_CC);
-        let modes = crate::root::display_modes(root);
-        app.display = DisplayFilter::new(lcd3x, nocolor_cc, modes);
+        // Before the modes are read, not after: a card written before the Game Boy's palette list
+        // was the table it is now has an index into the *old* one, and half of that range means
+        // something else here. `migrate_palette` puts the look back where it was and leaves a
+        // marker so it happens exactly once per card.
+        crate::root::migrate_palette(root);
+        let (mask_mode, cc) = crate::root::display_modes(root);
+        app.display = DisplayFilter::new(lcd3x, nocolor_cc, mask_mode, cc);
+        // The page the palette key walks starts on the entry the card left the Game Boy at, so
+        // the first tap continues from that palette rather than from page one.
+        app.pal_page = app.gb_palette() / slot_ui::PALETTE_PER_PAGE;
         app.audio = crate::root::audio_profile(root);
         app.state = read_slot_state(root);
+        // Which machine's shelf opens, and which overlay each system was last showing, both
+        // off the card. A cart still in the slot outranks the stored shelf — a resume has to
+        // open the shelf that holds it — and a stored shelf the card has no carts for is
+        // skipped, so a card whose only games are, say, GB never opens on an empty GBA shelf.
+        app.overlay_indices = crate::root::overlay_indices(root);
+        let last_system = app
+            .state
+            .cart
+            .as_deref()
+            .and_then(|stem| app.shelf.carts.iter().find(|c| c.stem == stem))
+            .map(|c| c.system());
+        let mut system = last_system.unwrap_or_else(|| crate::root::shelf_system(root));
+        if !app.shelf.carts.iter().any(|c| c.system() == system) {
+            system = [System::Gba, System::Gb, System::Gbc]
+                .into_iter()
+                .find(|s| app.shelf.carts.iter().any(|c| c.system() == *s))
+                .unwrap_or(System::Gba);
+        }
+        app.shelf_system = system;
+        app.shelf.set_system(system);
+        let view = app.system_view(system);
+        app.shelf.set_view(view, None);
+        app.retally_letters();
         // The palette, before anything has been rasterised: every face on the device is baked
         // with the ink burned into it, so the mode has to be in place before the first one, not
         // after. Anything later than this line is a light-mode device drawn in dark type.
@@ -912,20 +1275,131 @@ impl App {
     /// The mask the game pass should multiply by right now, resolved through the current mask_mode
     /// (white when the mask is cycled off). Pushed to the compositor every frame.
     pub fn display_mask(&self) -> [[[u8; 3]; 3]; 3] {
-        self.display.applied_mask()
+        // A Game Boy does not use the aperture table at all: its lattice comes from `display_grid`
+        // below, so that the dots and the picture are the same four colours. SELECT+X is therefore
+        // free on this machine and steps the screen art instead — see `Phase::Playing`.
+        self.display.applied_mask(self.current_machine() == System::Gb)
+    }
+
+    /// The Game Boy's four shades right now, whichever of the two tables they came from: a model's
+    /// own set while a model's screen art is up, and the entry `cc` holds otherwise.
+    ///
+    /// This is the one place that decides which of the two wins, so the palette, the lattice and
+    /// the boot log cannot disagree about it.
+    fn gb_shades(&self) -> Option<[[u8; 3]; 4]> {
+        if self.current_machine() != System::Gb {
+            return None;
+        }
+        if let Some(m) = App::model_of_index(self.overlay_slot, self.overlay_index) {
+            let m = m.min(crate::palettes::GB_MODELS.len() - 1);
+            return Some(crate::palettes::GB_MODELS[m].1);
+        }
+        Some(crate::palettes::GB_PALETTES[self.gb_palette()].1)
+    }
+
+    /// The Game Boy's entry in the palette table, clamped to it. Out of range can only come from
+    /// a `display.txt` edited by hand, and a card that names entry 9000 should show the last
+    /// palette rather than have the app fall over.
+    fn gb_palette(&self) -> usize {
+        (self.display.cc[DisplayFilter::machine_slot(System::Gb)] as usize)
+            .min(crate::palettes::GB_PALETTES.len() - 1)
+    }
+
+    /// The panel lattice for the machine that is up, as its colour and how much of it to mix.
+    ///
+    /// The colour is the current palette's **lightest shade**, which is the background: a DMG's
+    /// mesh is olive, a Light's is cyan, and neither is written down anywhere — change the
+    /// palette and the lattice follows. `None` on every other machine, where the aperture table
+    /// above still does the work and there is only one shade of lattice there is any sense in.
+    pub fn display_grid(&self) -> Option<([f32; 3], f32)> {
+        let light = self.gb_shades()?[0];
+        Some((
+            [
+                light[0] as f32 / 255.0,
+                light[1] as f32 / 255.0,
+                light[2] as f32 / 255.0,
+            ],
+            DisplayFilter::GB_GRID_MIX,
+        ))
+    }
+
+    /// Which machine the display filter is being asked about: the cart under the caret, which
+    /// during play is the cart in the slot, and the shelf's own machine when there is no caret
+    /// (an empty card). GB and GBC are two machines with two palettes even though they share one
+    /// screen geometry, so this cannot be `screen_system`.
+    pub fn current_machine(&self) -> System {
+        self.shelf
+            .current_cart()
+            .map(|c| c.system())
+            .unwrap_or(self.shelf_system)
     }
 
     /// The colour-correction matrix for the game pass right now, identity when off.
     pub fn display_cc(&self) -> [[f32; 3]; 3] {
-        self.display.applied_cc()
+        self.display.applied_cc(self.current_machine()).0
+    }
+
+    /// ...and its black point, which is the whole difference between a saturation grade and a
+    /// hardware palette. Zero now that the Game Boy is drawn by a lookup and not a matrix; the
+    /// colour machines never had one.
+    pub fn display_cc_bias(&self) -> [f32; 3] {
+        self.display.applied_cc(self.current_machine()).1
+    }
+
+    /// The Game Boy's palette as a 256-entry RGBA lookup, or `None` when this frame is not a
+    /// Game Boy palette at all — 原生灰, where the core's own greys are the look, and every
+    /// colour machine, which uses the matrix above.
+    ///
+    /// Worth being clear about the cost, because it looks like the expensive one and is not:
+    /// the matrix path is two `pow`s and nine multiplies per pixel, and this is one extra
+    /// nearest-neighbour sample replacing all of it. `pow` is the instruction to avoid on this
+    /// class of GPU.
+    pub fn display_palette(&self) -> Option<[u8; 1024]> {
+        let machine = self.current_machine();
+        if machine != System::Gb {
+            return None;
+        }
+        // 原生灰 is the core's own greys, so there is nothing to look up — and only the *table's*
+        // own entry means that. A model is always a palette: its four shades are the other half of
+        // the art, not a preference layered over it.
+        if self.display.cc[DisplayFilter::machine_slot(machine)] as usize
+            == crate::palettes::GB_NEUTRAL
+            && App::model_of_index(self.overlay_slot, self.overlay_index).is_none()
+        {
+            return None;
+        }
+        Some(DisplayFilter::gb_lut(self.gb_shades()?))
+    }
+
+    /// What the Game Boy's current palette is called, for the boot log. One table, names and
+    /// colours together, so a name cannot drift from what it names.
+    pub fn display_palette_name(&self) -> &'static str {
+        if self.current_machine() == System::Gb {
+            if let Some(m) = App::model_of_index(self.overlay_slot, self.overlay_index) {
+                return crate::palettes::GB_MODEL_NAMES
+                    [m.min(crate::palettes::GB_MODEL_NAMES.len() - 1)];
+            }
+        }
+        crate::palettes::GB_PALETTES[self.gb_palette()].0
     }
 
     /// 当前色彩校正该用的 gamma：FULLCOLOR(0)/NOCOLOR(2) 保持 1.0（编码空间，旧行为），
     /// 半彩(1) 与四档单色背光(3..=6) 用 `CC_GAMMA` 在线性空间里做。
+    /// GB 的色板同理：原生灰走 1.0（本来就是核心给的灰），其余色板都走 `CC_GAMMA`
+    /// —— LUT 的插值要在线性空间里做，否则中间两档会被压暗。
     pub fn display_cc_gamma(&self) -> f32 {
-        match self.display.cc_mode {
-            0 | 2 => 1.0,
-            _ => DisplayFilter::CC_GAMMA,
+        let machine = self.current_machine();
+        let mode = self.display.cc[DisplayFilter::machine_slot(machine)] as usize;
+        let flat = if machine == System::Gb {
+            mode == crate::palettes::GB_NEUTRAL
+                && App::model_of_index(self.overlay_slot, self.overlay_index).is_none()
+        } else {
+            mode == 0 || mode == 2
+        };
+        if flat {
+            1.0
+        } else {
+            DisplayFilter::CC_GAMMA
         }
     }
 
@@ -962,16 +1436,53 @@ impl App {
     fn cycle_mask(&mut self) {
         self.display.cycle_mask();
         if let Some(root) = &self.root {
-            crate::root::write_display_modes(root, self.display.mask_mode, self.display.cc_mode);
+            crate::root::write_display_modes(root, self.display.mask_mode, self.display.cc);
         }
     }
-    /// SELECT+Y: advance the colour correction (FULLCOLOR -> HALFCOLOR -> NOCOLOR -> DMG green ->
-    /// ice-blue -> amber -> pink backlight) and persist both modes to `System/display.txt`.
+    /// SELECT+Y: advance the colour correction of the machine that is up, and persist all of
+    /// them to `System/display.txt`. On a colour machine that is FULLCOLOR -> HALFCOLOR ->
+    /// NOCOLOR -> DMG green -> ice-blue -> amber -> pink backlight; on a Game Boy it is the next
+    /// palette on the page the browser last showed.
+    ///
+    /// **One page, not the whole table.** The Game Boy's list is every palette gambatte ships —
+    /// hundreds of them — and a key that walked all of them would be a key nobody could aim. The
+    /// page is the unit: hold the key to open the browser and turn to the page you want, let go,
+    /// and this walks the fifteen on it. That is also what makes the ring's length something the
+    /// user can see, rather than a number that changes with a palette pack.
+    ///
+    /// **Refused while a model is up**, and that is the whole of what "bound" means. A model's
+    /// four shades are not a preference layered over its art, they are the other half of it: the
+    /// DMG screen was drawn against the DMG ramp, and letting this key recolour the picture
+    /// inside that case would leave the two disagreeing with nothing on screen to say so. The
+    /// press is refused rather than dropped, so it reads as answered — the same as every other
+    /// "nothing doing" action in this file.
     fn cycle_cc(&mut self) {
-        self.display.cycle_cc();
-        if let Some(root) = &self.root {
-            crate::root::write_display_modes(root, self.display.mask_mode, self.display.cc_mode);
+        if self.current_machine() == System::Gb {
+            if App::model_of_index(self.overlay_slot, self.overlay_index).is_some() {
+                self.refuse();
+                return;
+            }
+            self.step_palette();
+        } else {
+            self.display.cycle_cc(self.current_machine());
         }
+        if let Some(root) = &self.root {
+            crate::root::write_display_modes(root, self.display.mask_mode, self.display.cc);
+        }
+    }
+
+    /// The Game Boy's palette one along the page that is up, wrapping at the end of that page.
+    /// `self.pal_page` is the page the browser was last showing, so a palette picked on page 7
+    /// keeps being cycled among page 7's fifteen until the browser is opened again.
+    fn step_palette(&mut self) {
+        let total = crate::palettes::GB_PALETTES.len();
+        let next = slot_store::cycle_on_page(
+            self.pal_page,
+            self.gb_palette(),
+            total,
+            slot_ui::PALETTE_PER_PAGE,
+        );
+        self.display.cc[DisplayFilter::machine_slot(System::Gb)] = next as u16;
     }
 
     /// Into the slot or onto the shelf. Reached on boot once the clock is known, and from
@@ -980,11 +1491,16 @@ impl App {
         // One cart is a dedicated device. There is nothing to choose between, so whatever
         // `slot.state` remembers, including a cart that is no longer on the card, names the
         // only thing it could have meant.
+        // A position in the *view*, not the library: the shelf is one machine's carts, and a
+        // library index would seat the caret on the wrong cart — or past the end of a shorter
+        // view — the moment the shelf is filtered. `index_of_stem` reads the view.
         let seated = if self.single_cart() {
             Some(0)
         } else {
-            let stem = self.state.cart.clone();
-            stem.and_then(|stem| self.shelf.carts.iter().position(|c| c.stem == stem))
+            self.state
+                .cart
+                .as_deref()
+                .and_then(|stem| self.shelf.index_of_stem(stem))
         };
         self.phase = Phase::Shelf;
         match seated {
@@ -1035,6 +1551,21 @@ impl App {
     /// Seconds since the epoch, from the platform once there is one. The shelf clock and the
     /// polaroid captions both read it, so neither can disagree with the cartridge RTC.
     /// Where the card is mounted. `None` only in the tests that never touch one.
+    /// Which machine's shelf is up. The cart's own size on screen follows from it, so anything
+    /// drawing a row of carts has to ask rather than assume the Advance cart's.
+    pub fn shelf_system(&self) -> slot_store::System {
+        self.shelf_system
+    }
+
+    /// Where the shelf's line of type sits: centred in the gap between the row's own foot and
+    /// the top of the case. Derived rather than picked, so moving either end — a taller cart, a
+    /// deeper bay — carries it along instead of leaving it behind.
+    fn shelf_title_y(&self) -> f32 {
+        let foot = slot_ui::size_for(self.shelf_system).foot_y();
+        let case = OUT_H as f32 - MOUTH_H;
+        (foot + case) / 2.0 - SHELF_TITLE_H as f32 / 2.0
+    }
+
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()
     }
@@ -1092,14 +1623,15 @@ impl App {
         self.clock_faces = Some((line, hint));
     }
 
-    pub fn set_cart_shadow(&mut self, face: TexId) {
-        self.shelf.set_shadow(face);
+    pub fn set_cart_shadow(&mut self, face: TexId) -> Option<TexId> {
+        self.shelf.set_shadow(face)
     }
 
     /// The blank cart a cart whose own face is not built yet is drawn as. Uploaded at boot,
-    /// with the shadow: it is the same for every cart and never changes.
-    pub fn set_cart_placeholder(&mut self, face: TexId) {
-        self.shelf.set_placeholder(face);
+    /// with the shadow: it is the same for every cart and never changes — except when the row's
+    /// machine does, which is why this hands back what it replaced.
+    pub fn set_cart_placeholder(&mut self, face: TexId) -> Option<TexId> {
+        self.shelf.set_placeholder(face)
     }
 
     pub fn set_wallpaper(&mut self, face: TexId) {
@@ -1132,6 +1664,34 @@ impl App {
         self.shelf.current().unwrap_or(0)
     }
 
+    /// The carts the row is drawing, as library indices — what a build has to cover, as opposed
+    /// to a contiguous run of indices around the caret. See `Shelf::draw_window`.
+    pub fn shelf_draw_window(&self) -> Vec<usize> {
+        self.shelf.draw_window()
+    }
+
+    /// How many carts the shelf's view holds, as opposed to how many are on the card.
+    pub fn shelf_view_len(&self) -> usize {
+        self.shelf.view_len()
+    }
+
+    /// How far a cart is from the caret that would be showing it — the row on screen when the
+    /// view holds it, otherwise the front of its own machine's shelf, where a switch lands.
+    /// What the resident window and the filler both measure in. See `Shelf::shelf_distance`.
+    pub fn shelf_distance(&self, cart: usize) -> Option<usize> {
+        self.shelf.shelf_distance(cart)
+    }
+
+    /// The cart index in each slot the row would draw, in slot order — the draw's own answer to
+    /// "which cart is this", read back for the boot log rather than recomputed.
+    pub fn shelf_slot_carts(&self) -> Vec<usize> {
+        self.shelf
+            .slot_rects(None, 0.0, 0.0)
+            .iter()
+            .map(|r| r.cart)
+            .collect()
+    }
+
     /// Exactly one cart on the card. The shelf is unreachable and eject is refused.
     pub fn single_cart(&self) -> bool {
         self.shelf.carts.len() == 1
@@ -1156,6 +1716,326 @@ impl App {
     /// Which face texture a cart is currently holding, if any.
     pub fn face_of(&self, i: usize) -> Option<TexId> {
         self.shelf.face_of(i)
+    }
+
+    /// Hand the seated cart's overlay set to the app, from `Session::spawn_core`: every
+    /// `Overlay/<sys>.png` / `<sys>-NN.png` for the cart's system, in rotation order (`slot` 0
+    /// for GB, 1 for GBC), with the persisted index for that system applied. `list` empty for
+    /// GBA — or a card with no art — clears the overlay. The chosen file is decoded here and
+    /// `overlay_dirty` is set so the frontend re-mints the GL texture once.
+    pub(crate) fn set_overlay_set(&mut self, list: Vec<crate::root::OverlayFile>, slot: usize) {
+        self.overlay_list = list;
+        let slot = slot.min(1);
+        self.overlay_slot = slot;
+        let choices = Self::overlay_choices(slot, self.overlay_list.len());
+        self.overlay_index = if choices == 0 {
+            0
+        } else {
+            self.overlay_indices[slot].min(choices - 1)
+        };
+        self.refresh_overlay_pixels();
+    }
+
+    /// How many overlay choices a system has. A Game Boy's three models come first and the
+    /// card's own overlays after them; a Game Boy Color has only its overlays.
+    fn overlay_choices(slot: usize, ordinary: usize) -> usize {
+        if slot == 0 {
+            DisplayFilter::GB_MODEL_COUNT + ordinary
+        } else {
+            ordinary
+        }
+    }
+
+    /// Which model a combined index names, if it names one.
+    fn model_of_index(slot: usize, index: usize) -> Option<usize> {
+        (slot == 0 && index < DisplayFilter::GB_MODEL_COUNT).then_some(index)
+    }
+
+    /// Where the card's *own* overlay for this index is, if the index is one of those rather
+    /// than a model.
+    fn ordinary_overlay_at(&self) -> Option<&crate::root::OverlayFile> {
+        let at = if self.overlay_slot == 0 {
+            self.overlay_index.saturating_sub(DisplayFilter::GB_MODEL_COUNT)
+        } else {
+            self.overlay_index
+        };
+        self.overlay_list.get(at)
+    }
+
+    /// Re-decode the chosen overlay file into `overlay_pixels` and mark the texture dirty.
+    /// `None` pixels (`None` from a missing/corrupt file, or an empty list) is a real answer:
+    /// the frontend reads it as "release the texture", so the built-in look stands.
+    fn refresh_overlay_pixels(&mut self) {
+        // A model's art is not in `overlay_list` — `overlay_files` cannot name it and should not
+        // — so the model index is resolved to its own file here.
+        self.overlay_pixels = match Self::model_of_index(self.overlay_slot, self.overlay_index) {
+            Some(m) => self
+                .root
+                .clone()
+                .and_then(|root| {
+                    crate::root::model_overlay(
+                        &root,
+                        "gb",
+                        crate::palettes::GB_MODELS[m.min(crate::palettes::GB_MODELS.len() - 1)].0,
+                    )
+                })
+                .and_then(|path| slot_ui::decode_rgba(&path)),
+            None => self
+                .ordinary_overlay_at()
+                .and_then(|overlay| slot_ui::decode_rgba(&overlay.path)),
+        };
+        self.overlay_dirty = true;
+    }
+
+    /// Whether the overlay up asks for the screen reflection — its file name carried the `x`
+    /// marker. Read by the frontend to hand the compositor the overlay texture as the effect's
+    /// zone mask; `None`/false leaves the game drawn exactly as before.
+    pub(crate) fn overlay_reflects(&self) -> bool {
+        // Every model mask is a reflection layer: that is what they were drawn as, and it is why
+        // their names carry the same trailing `x` the ordinary ones use to say so.
+        if Self::model_of_index(self.overlay_slot, self.overlay_index).is_some() {
+            return true;
+        }
+        self.ordinary_overlay_at().is_some_and(|o| o.reflect)
+    }
+
+    /// The overlay texture the compositor minted, if any. The reflection samples its alpha as
+    /// the zone, so the same texture is both the art and the effect's mask.
+    pub(crate) fn overlay_tex(&self) -> Option<TexId> {
+        self.overlay_tex
+    }
+
+    /// SELECT+R2: step to the next overlay for the highlighted cart's system (the one in the
+    /// slot while a game is playing). A system with a single file has nothing to rotate, and
+    /// GBA has no overlay set at all; both are silent no-ops rather than a refusal, since the
+    /// press is a step through a ring and a card may simply carry one image.
+    fn overlay_next(&mut self) {
+        let Some(system) = self.shelf.current_cart().map(|c| c.system()) else {
+            return;
+        };
+        let slot = match system {
+            System::Gb => 0,
+            System::Gbc => 1,
+            System::Gba => return,
+        };
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let which = if slot == 0 { "gb" } else { "gbc" };
+        let list = crate::root::overlay_files(&root, which);
+        // A Game Boy's ring is its three models and then the card's own overlays; a Game Boy
+        // Color's is just its overlays.
+        let choices = Self::overlay_choices(slot, list.len());
+        if choices <= 1 {
+            return;
+        }
+        // Note the ring is never empty on a Game Boy even when the card carries no art at all:
+        // `choices` counts the three models before anything in `Overlay/`.
+        self.overlay_indices[slot] = (self.overlay_indices[slot] + 1) % choices;
+        crate::root::write_overlay_indices(&root, self.overlay_indices);
+        // Landing on a model adopts its palette — and nothing is written for that here, because
+        // there is nothing to write: a model's four shades are not an entry in the table and are
+        // not reachable from the palette key, so `gb_shades` reads them straight off the model
+        // that is up. The palette the card holds is left exactly as it was, which is what makes
+        // walking through the DMG and out again land back on the look that was chosen before it.
+        // With the cart in the slot, swap the live set too so the change is on screen now.
+        if matches!(self.phase, Phase::Playing { .. }) {
+            self.overlay_list = list;
+            self.overlay_slot = slot;
+            self.overlay_index = self.overlay_indices[slot];
+            self.refresh_overlay_pixels();
+        }
+    }
+
+    /// `true` while the overlay texture needs (re)building. Read by the frontend's `sync_overlay`.
+    pub(crate) fn overlay_dirty(&self) -> bool {
+        self.overlay_dirty
+    }
+
+    /// The decoded overlay pixels, if any — read by `sync_overlay` to (re)build the texture.
+    pub(crate) fn overlay_pixels(&self) -> Option<&(Vec<u8>, u32, u32)> {
+        self.overlay_pixels.as_ref()
+    }
+
+    /// Drop the current overlay texture handle, returning it for the compositor to release.
+    pub(crate) fn take_overlay_tex(&mut self) -> Option<TexId> {
+        self.overlay_tex.take()
+    }
+
+    /// Store the freshly minted overlay texture handle (or `None` when there is no overlay).
+    pub(crate) fn set_overlay_tex(&mut self, tex: Option<TexId>) {
+        self.overlay_tex = tex;
+    }
+
+    /// Clear the dirty flag once `sync_overlay` has reconciled the texture with `overlay_pixels`.
+    pub(crate) fn set_overlay_clean(&mut self) {
+        self.overlay_dirty = false;
+    }
+
+    /// Whether the app is taking no input right now — true only for the length of a
+    /// system-shelf swap. `Session::act` reads it so every key is inert mid-swap, the volume
+    /// and mute included: they are handled on the session's side of `apply`.
+    pub fn input_locked(&self) -> bool {
+        self.shelf_switch.is_some()
+    }
+
+    /// The three machine logos for the bottom-left indicator, in `GB, GBC, GBA` order, each
+    /// with the size it was rasterised at. Uploaded by the frontend at boot.
+    pub fn set_shelf_ind_faces(&mut self, faces: Vec<(TexId, u32, u32)>) {
+        self.shelf_ind_faces = faces;
+    }
+
+    /// The light theme's own three, used when the palette is in light mode.
+    pub fn set_shelf_ind_light(&mut self, faces: Vec<(TexId, u32, u32)>) {
+        self.shelf_ind_light = faces;
+    }
+
+    /// The library indices of one machine's carts, in library order — the view a system shelf
+    /// shows. A card can carry all three machines at once, so this is how the row is narrowed
+    /// to the one whose shelf is up.
+    /// One machine's shelf, in the order it shows. Kept as a call rather than a field so the
+    /// shelf stays the only thing that knows how a machine's list is built.
+    fn system_view(&self, system: System) -> Vec<usize> {
+        self.shelf.machine_view(system)
+    }
+
+    /// Put one machine's shelf up: rebuild the view to its carts, drop any favourites sub-view,
+    /// park the caret at the front, and remember the choice on the card.
+    fn show_system(&mut self, system: System) {
+        self.shelf_system = system;
+        // The row is laid out for whichever machine is up: an Advance cart is landscape and a
+        // Game Boy cart portrait, so the geometry travels with the shelf rather than the app.
+        self.shelf.set_system(system);
+        // ...and so does the row's *frame*: the shadow under a dimmed cart and the blank cart a
+        // not-yet-built face stands in as are both cut to one machine's shape, and they were cut
+        // for the shelf this device came up on. Raised here and taken by the frontend, which is
+        // the only party with a compositor.
+        self.shelf_dirty = true;
+        self.fav_view = false;
+        let view = self.system_view(system);
+        self.shelf.set_view(view, None);
+        self.retally_letters();
+        if let Some(root) = &self.root {
+            crate::root::write_shelf_system(root, system);
+        }
+    }
+
+    /// SELECT+L2: start a swap to the next machine that has any carts. Nothing happens — and
+    /// the press is refused, so it reads as answered — on a card that carries only one machine.
+    /// A swap already in flight swallows the press, so a second one cannot stack on the first.
+    fn cycle_system(&mut self) {
+        if self.shelf_switch.is_some() || !self.on_shelf() || self.core_picker.is_some() {
+            return;
+        }
+        const ORDER: [System; 3] = [System::Gba, System::Gb, System::Gbc];
+        let cur = ORDER.iter().position(|&s| s == self.shelf_system).unwrap_or(0);
+        for k in 1..=ORDER.len() {
+            let to = ORDER[(cur + k) % ORDER.len()];
+            if self.shelf.carts.iter().any(|c| c.system() == to) {
+                // A held arrow belongs to the shelf that is leaving; the swap owns the row now.
+                self.shelf.release_hold();
+                self.letters.release_hold();
+                self.shelf_switch = Some(ShelfSwitch {
+                    from: self.shelf_system,
+                    to,
+                    t: 0.0,
+                    swapped: false,
+                });
+                return;
+            }
+        }
+        self.refuse();
+    }
+
+    /// The swap's clock and the row's motion. Runs every frame; with no swap in flight it
+    /// simply clears the motion, so a still row is laid out exactly as before this existed.
+    fn update_shelf_switch(&mut self, dt: f32) {
+        let Some(mut sw) = self.shelf_switch.take() else {
+            self.shelf.set_motion(None);
+            return;
+        };
+        sw.t += dt;
+        // The view swaps at the bottom of the ascend: the old carts are off the top of the
+        // panel by then, so the new shelf appears to fall into the space they left.
+        if !sw.swapped && sw.t >= SWITCH_ASCEND_S {
+            sw.swapped = true;
+            self.show_system(sw.to);
+        }
+        if sw.t >= SWITCH_ASCEND_S + SWITCH_DESCEND_S {
+            self.shelf.set_motion(None);
+            return;
+        }
+        let p = if sw.t < SWITCH_ASCEND_S {
+            sw.t / SWITCH_ASCEND_S
+        } else {
+            (sw.t - SWITCH_ASCEND_S) / SWITCH_DESCEND_S
+        };
+        self.shelf.set_motion(Some(slot_ui::Motion {
+            p: p.clamp(0.0, 1.0),
+            ascend: !sw.swapped,
+        }));
+        self.shelf_switch = Some(sw);
+    }
+
+    /// The logo of the machine whose shelf is up, in the bottom-left corner — the mirror of the
+    /// favourites star in the bottom-right. Only ever one logo: it *is* the shelf. While a swap
+    /// runs, the change is a cross-dissolve — the old machine's logo fades out as the new one
+    /// fades in, both in place — so it dissolves rather than cuts. A reading, not a control:
+    /// SELECT+L2 is the control.
+    fn draw_shelf_indicator(&self, out: &mut Vec<Draw>) {
+        // The top of the bottom band, which is the box the badge is centred in.
+        let y = OUT_H as f32 - MOUTH_H;
+        match &self.shelf_switch {
+            Some(sw) => {
+                let total = SWITCH_ASCEND_S + SWITCH_DESCEND_S;
+                let p = (sw.t / total).clamp(0.0, 1.0);
+                // Smoothstep, so the dissolve eases in and out rather than fading linearly.
+                let e = p * p * (3.0 - 2.0 * p);
+                self.draw_shelf_logo(sw.from, 1.0 - e, y, out);
+                self.draw_shelf_logo(sw.to, e, y, out);
+            }
+            None => self.draw_shelf_logo(self.shelf_system, 1.0, y, out),
+        }
+    }
+
+    /// One machine logo, bottom-left, at `alpha`. Both halves of a cross-dissolve come through
+    /// here, so they are placed identically and only their opacity differs.
+    fn draw_shelf_logo(&self, system: System, alpha: f32, y: f32, out: &mut Vec<Draw>) {
+        if alpha <= 0.0 {
+            return;
+        }
+        let idx = match system {
+            System::Gb => 0,
+            System::Gbc => 1,
+            System::Gba => 2,
+        };
+        let faces = match slot_ui::palette::mode() {
+            slot_ui::Mode::Light => &self.shelf_ind_light,
+            slot_ui::Mode::Dark => &self.shelf_ind_faces,
+        };
+        let Some(&(tex, w, h)) = faces.get(idx) else {
+            return;
+        };
+        if h == 0 {
+            return;
+        }
+        // Centred in the band's height, and a fixed margin in from the panel's left edge. A
+        // card's own badge is contained in the box rather than stretched, so one that arrives a
+        // different shape still sits right; the built-in word is the same width it always was.
+        let cy = y + MOUTH_H / 2.0;
+        let k = (SHELF_IND_W / w as f32).min(SHELF_IND_H / h as f32);
+        let (sw, sh) = (w as f32 * k, h as f32 * k);
+        // Centred on the clock's own centre at the other end of the top band, so the two left-hand
+        // marks stand in one column.
+        let clock_cx = STATUS_READ_MARGIN + self.shelf_clock.w as f32 / 2.0;
+        out.push(Draw::Tex {
+            x: clock_cx - sw / 2.0,
+            y: cy - sh / 2.0,
+            w: sw,
+            h: sh,
+            tex,
+            alpha,
+        });
     }
 
     /// One face per slot in `letters::SLOTS` order, each with the size it was rasterised at,
@@ -1186,7 +2066,7 @@ impl App {
         // letter jump could seat the caret on a cart this view does not hold. Letter nav is
         // the library's own control and stands down while a view is filtered; the arrows
         // still walk the row.
-        if self.shelf.filtered() {
+        if self.fav_view {
             return;
         }
         let counts = self.letter_counts;
@@ -1198,7 +2078,7 @@ impl App {
 
     /// The same move, without a press behind it: the repeat of a held key.
     fn repeat_letters(&mut self, now: Millis) {
-        if self.shelf.filtered() {
+        if self.fav_view {
             return;
         }
         let counts = self.letter_counts;
@@ -1213,16 +2093,13 @@ impl App {
     /// the glide runs to the nearest image of the chosen cart — so the strip and the row agree
     /// about which way is "onward" without this having to say so.
     fn seat_on_letter(&mut self) {
-        if self.shelf.filtered() {
+        if self.fav_view {
             return;
         }
         let slot = self.letters.target();
-        let Some(i) = self
-            .shelf
-            .carts
-            .iter()
-            .position(|c| letters::slot_of(c.initial) == slot)
-        else {
+        // Found in the *view*, not the library: the shelf holds one machine's carts, and the
+        // strip counts those (`retally_letters`), so `index` must be a view position.
+        let Some(i) = self.shelf.view_position_of_letter(slot) else {
             // A slot the strip can only have reached by being counted as non-empty, so this is
             // unreachable; the next frame's `centre_on` puts it back if it ever happens.
             return;
@@ -1439,6 +2316,19 @@ impl App {
         self.shelf.current_cart().map(|c| c.stem.as_str())
     }
 
+    /// Which machine's picture belongs on the panel.
+    ///
+    /// The card's three shelves collapse into the renderer's two here, because Game Boy and
+    /// Game Boy Color hand back the same 160x144 frame — `slot_store::System` is the three and
+    /// `slot_gfx::System` is the two. `Gba` stands in for an empty shelf, where there is no
+    /// picture to misplace either way.
+    pub fn screen_system(&self) -> ScreenSystem {
+        match self.shelf.current_cart().map(|c| c.system()) {
+            Some(System::Gb) | Some(System::Gbc) => ScreenSystem::Gb,
+            _ => ScreenSystem::Gba,
+        }
+    }
+
     /// The cached reading. `None` until the first slow tick, and on any device with no gauge.
     pub fn battery(&self) -> Option<Battery> {
         self.battery
@@ -1456,6 +2346,13 @@ impl App {
     /// take them; while the game is playing they are the game's and the app sees only the
     /// gestures that are never the game's.
     pub fn apply(&mut self, action: Action) {
+        // A system-shelf swap owns the screen for its two beats: every key is inert until it
+        // lands, so nothing can be pressed into the middle of the movement. `Session::act`
+        // gates the volume and mute on `input_locked` for the same reason — those are handled
+        // on the session's side of `apply` and would otherwise slip through.
+        if self.shelf_switch.is_some() {
+            return;
+        }
         // Ahead of everything, including the device's own keys: the menu is a decision the
         // user is in the middle of making, and a volume press underneath it would be one
         // more thing happening while they read.
@@ -1466,6 +2363,7 @@ impl App {
                 _ => return self.power_menu_input(action),
             }
         }
+        // (WiFi 直连对话框的输入拦截已移除——功能暂缓。)
         // The cheat table owns every button on the game's side while it is up: up/down move, A
         // toggles the row, B leaves, and the lid is honoured so the device can still sleep under it.
         if self.cheat_menu.is_some() {
@@ -1473,6 +2371,15 @@ impl App {
                 Action::LidClose => return self.doze(),
                 Action::LidOpen => return self.wake(),
                 _ => return self.cheat_menu_input(action),
+            }
+        }
+        // The palette browser owns them the same way while it is up: it is a modal over a paused
+        // game, and the lid is honoured so the device can still sleep under it.
+        if self.pal_cursor.is_some() {
+            match action {
+                Action::LidClose => return self.doze(),
+                Action::LidOpen => return self.wake(),
+                _ => return self.palette_browser_input(action),
             }
         }
         // The lid, the light and the sound belong to the device rather than to whatever is
@@ -1544,9 +2451,11 @@ impl App {
                 Action::GbaDown(Btn::Start) if self.core_picker.is_none() => {
                     self.open_core_picker()
                 }
-                // SELECT+X / SELECT+Y cycle the panel mask and colour correction in place on the
-                // shelf (the same chords as in game), guarded so they cannot stack on the core picker.
-                Action::MaskCycle if self.core_picker.is_none() => self.cycle_mask(),
+                // Colour correction (SELECT+Y) still applies here, because it recolours the
+                // carts themselves. The panel mask (SELECT+X) and the screen overlay
+                // (SELECT+R2) are the game panel's alone and are answered in `Phase::Playing`
+                // only — on the shelf they do nothing. The shelf cycle is a hold of Y now,
+                // spent in `sys_hold`, not a chord.
                 Action::ColorCycle if self.core_picker.is_none() => self.cycle_cc(),
                 // SELECT+VOL, and the shelf is the only screen that answers it: the change
                 // reopens the audio device, which is free here and a gap in the sound anywhere
@@ -1588,16 +2497,21 @@ impl App {
                         self.insert(false);
                     }
                 }
-                // B, the screen's other two-gesture button, on the same mechanism as A's: the
+                // X, the screen's other two-gesture button, on the same mechanism as A's: the
                 // press is remembered, the release decides which gesture it was, and the hold
                 // has already spent the press if it got to the threshold first. A short press
                 // stars the cart; a hold swaps the shelf it is shown on.
-                Action::GbaDown(Btn::B) => self.fav_held = Some(now),
-                Action::GbaUp(Btn::B) => {
+                Action::GbaDown(Btn::X) => self.fav_held = Some(now),
+                Action::GbaUp(Btn::X) => {
                     if self.fav_held.take().is_some() {
                         self.toggle_favorite();
                     }
                 }
+                // Y holds to swap which machine's shelf is up. Nothing fires on the press: the
+                // hold is spent in `sys_hold` on the timer and the release only clears.
+                Action::GbaDown(Btn::Y) => self.sys_held = Some(now),
+                Action::GbaUp(Btn::Y) => self.sys_held = None,
+                // (长按 B 起 WiFi 直连的入口已按用户要求移除——功能暂缓。)
                 Action::Insert => self.insert(false),
                 _ => {}
             },
@@ -1606,8 +2520,23 @@ impl App {
             Phase::Inserting { .. } if action == Action::Eject => self.eject(),
             Phase::Playing { .. } => match action {
                 Action::Eject => self.eject(),
+                // SELECT+X. The chord is the same on both machines and it means the thing the
+                // machine can actually use: on a Game Boy the grid is fixed at LCD3X 50% (see
+                // `display_mask`) and the key is the way through the models and the card's own
+                // screen art, which is the choice that matters when the picture has four shades
+                // and the panel around it is the rest of the look.
+                Action::MaskCycle if self.current_machine() == System::Gb => self.overlay_next(),
                 Action::MaskCycle => self.cycle_mask(),
                 Action::ColorCycle => self.cycle_cc(),
+                // The long half of the same key. Held, SELECT+Y opens the browser; tapped, it
+                // walks the page. Only a Game Boy has a table long enough to need browsing, and
+                // the shelf has no palette on screen to change, so the hold lands nowhere else.
+                Action::ColorHold if self.current_machine() == System::Gb => {
+                    self.open_palette_browser()
+                }
+                // The overlay is on screen here, so this is where rotating it is *seen*; the
+                // choice is written to the card all the same.
+                Action::OverlayNext => self.overlay_next(),
                 Action::GameMenu => self.open_game_menu(),
                 Action::Polaroids => self.open_polaroids(),
                 Action::SaveState => self.save_state(),
@@ -1811,6 +2740,10 @@ impl App {
     pub fn update(&mut self, dt: f32) {
         self.clock += dt as f64 * 1000.0;
         self.timers();
+        // The system-shelf swap, before the phase walk: it advances the beats, swaps the view
+        // at the bottom of the ascend, and hands the row its motion for this frame. With no
+        // swap in flight it clears the motion, so a still row is laid out as it always was.
+        self.update_shelf_switch(dt);
         // A queue poll rather than a syscall, so the frame loop can afford it every frame —
         // which is the whole reason the slow parts of starting a link are on a thread of
         // their own.
@@ -1968,6 +2901,22 @@ impl App {
     fn timers(&mut self) {
         self.play_hold();
         self.fav_hold();
+        self.sys_hold();
+        // The "connect the cable" beat hands over to the live screen on its own, a moment after
+        // the gadget has been switched.
+        // While the connect beat is up, poll for the address the enter script leaves behind: the
+        // beat hands over to the live screen the moment one appears, however long the join took.
+        if self.direct_link == Some(1) && self.now().saturating_sub(self.direct_at) >= 1000 {
+            self.direct_at = self.now();
+            if let Ok(ip) = std::fs::read_to_string("/tmp/slot-ip") {
+                let ip = ip.trim().to_string();
+                if !ip.is_empty() {
+                    self.direct_ip = Some(ip);
+                    self.direct_ip_dirty = true;
+                    self.direct_link = Some(2);
+                }
+            }
+        }
         // The grace period can run out with the switcher open, so the hint answers to the
         // clock rather than to whatever was on offer on the way in.
         let offer = self.undo_label();
@@ -2112,6 +3061,7 @@ impl App {
             self.draw_power_menu(index, out);
             return;
         }
+        // (WiFi 直连对话框的绘制已移除——功能暂缓。)
         if let Some(index) = self.cheat_menu {
             self.draw_cheat_menu(index, out);
             return;
@@ -2196,7 +3146,7 @@ impl App {
                         // The letter strip is the library's index, and the favourites shelf is
                         // not the library: the dial has stood down, so the band is left with an
                         // empty window rather than an index that no longer means anything.
-                        if !self.shelf.filtered() {
+                        if !self.fav_view {
                             self.letters.draw_strip(
                                 &self.letter_faces,
                                 self.letter_ridge_face,
@@ -2205,6 +3155,9 @@ impl App {
                             );
                         }
                         self.draw_fav_indicator(out);
+                        // Which machine's shelf is up, in the opposite bottom corner — the
+                        // mirror of the favourites star.
+                        self.draw_shelf_indicator(out);
                     }
                 }
                 // After the row and before the case: it names what the row is showing, so it
@@ -2212,7 +3165,7 @@ impl App {
                 if let Some((tex, w, _)) = self.shelf_title_face {
                     out.push(Draw::Tex {
                         x: (OUT_W as f32 - w as f32) / 2.0,
-                        y: SHELF_TITLE_Y,
+                        y: self.shelf_title_y(),
                         w: w as f32,
                         h: SHELF_TITLE_H as f32,
                         tex,
@@ -2281,7 +3234,10 @@ impl App {
             // The slot stays on screen until the picture behind it has finished arriving,
             // so the game blooms out of a lit lip rather than replacing it.
             Phase::Playing { cart } if self.screen < 1.0 => self.chrome(cart, 0.0, out),
-            Phase::Playing { .. } => self.push_game(out),
+            Phase::Playing { .. } => {
+                self.push_game(out);
+                self.draw_palette_browser(out);
+            }
             // The paused game stays underneath, covered by the screenshot the switcher
             // draws over the whole screen.
             Phase::Polaroids { .. } => {
@@ -2364,7 +3320,48 @@ impl App {
     /// picture; the chrome puts it in the same list, in front of the cart.
     fn push_game(&self, out: &mut Vec<Draw>) {
         if self.game_visible() {
+            // A tinted-backlight colour correction makes a GB picture glow one colour; the
+            // letterbox around it would otherwise stay black and read as a frame that does not
+            // belong. Fill it with the same colour, so the whole panel is one tinted surface.
+            //
+            // **Plain GB only.** GBC is a colour machine whose games use their own palettes, so
+            // its surround keeps the black letterbox — a mono tint there would be a lie about
+            // the machine, and GBC is themed through an overlay PNG instead. A GBA picture
+            // fills the frame, so it has no letterbox to fill either. And only modes 3..=6 have
+            // a single colour to fill with.
+            if matches!(
+                self.shelf.current_cart().map(|c| c.system()),
+                Some(System::Gb)
+            ) {
+                if let Some(c) = self.display.cc_border(self.current_machine()) {
+                    out.push(Draw::Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: OUT_W as f32,
+                        h: OUT_H as f32,
+                        colour: [c[0], c[1], c[2], 1.0],
+                    });
+                }
+            }
             out.push(Draw::Game);
+            // Over the game and under the HUD: a per-system screen overlay PNG from the card,
+            // composited with its own alpha. Opaque pixels replace the picture (bezel, grid),
+            // transparent ones let it through. No texture means the built-in look.
+            if let Some(tex) = self.overlay_tex {
+                out.push(Draw::Tex {
+                    x: 0.0,
+                    y: 0.0,
+                    w: OUT_W as f32,
+                    h: OUT_H as f32,
+                    tex,
+                    alpha: 1.0,
+                });
+            }
+            // ...and the glow over the art, not under it: the art is the plastic's colour and
+            // the glow is light landing on that plastic. Push it whether or not the card has an
+            // overlay — the compositor is what knows whether anything reflective is up, and a
+            // marker that costs one comparison is cheaper than asking the same question twice.
+            out.push(Draw::Glow);
         }
     }
 
@@ -2489,6 +3486,114 @@ impl App {
         );
     }
 
+    /// The direct-connect dialog: a scrim over everything, then the lines for its stage centred on
+    /// the panel. Stage 0 asks, stage 1 waits for the cable, stage 2 is the live mode.
+    fn draw_direct_link(&self, stage: u8, out: &mut Vec<Draw>) {
+        out.push(Draw::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: OUT_W as f32,
+            h: OUT_H as f32,
+            colour: slot_ui::opening(),
+        });
+        match stage {
+            0 => {
+                self.draw_centred_line(0, 200.0, out);
+                self.draw_centred_line(1, 262.0, out);
+            }
+            1 => self.draw_centred_line(2, 240.0, out),
+            _ => {
+                self.draw_centred_line(3, 172.0, out);
+                if let Some((tex, w, h)) = self.direct_ip_face {
+                    out.push(Draw::Tex {
+                        x: (OUT_W as f32 - w as f32) / 2.0,
+                        y: 226.0,
+                        w: w as f32,
+                        h: h as f32,
+                        tex,
+                        alpha: 1.0,
+                    });
+                }
+                self.draw_centred_line(4, 296.0, out);
+            }
+        }
+    }
+
+    /// One baked dialog line, centred horizontally on the panel at the given vertical centre.
+    fn draw_centred_line(&self, i: usize, cy: f32, out: &mut Vec<Draw>) {
+        if let Some(&(tex, w, h)) = self.direct_faces.get(i) {
+            out.push(Draw::Tex {
+                x: (OUT_W as f32 - w as f32) / 2.0,
+                y: cy - h as f32 / 2.0,
+                w: w as f32,
+                h: h as f32,
+                tex,
+                alpha: 1.0,
+            });
+        }
+    }
+
+    /// The direct-connect lines, uploaded once at boot.
+    pub fn set_direct_faces(&mut self, faces: Vec<(TexId, u32, u32)>) {
+        self.direct_faces = faces;
+    }
+
+    /// Open the direct-connect prompt — a long hold of B on the shelf.
+    fn open_direct_link(&mut self) {
+        self.direct_link.get_or_insert(0);
+    }
+
+    /// A on the dialog: switch the gadget to mass storage. Nothing else happens on this stage.
+    fn direct_confirm(&mut self) {
+        if self.direct_link == Some(0) {
+            self.direct_link = Some(1);
+            self.direct_at = self.now();
+            self.direct_ip = None;
+            self.direct_ip_face = None;
+            let _ = std::fs::remove_file("/tmp/slot-ip");
+            self.run_direct_script(true);
+        }
+    }
+
+    /// B on the dialog: cancel the prompt, or leave the live mode (drop the radio).
+    fn direct_cancel(&mut self) {
+        if self.direct_link == Some(2) {
+            self.run_direct_script(false);
+        }
+        self.direct_link = None;
+        self.direct_ip = None;
+        self.direct_ip_face = None;
+        self.direct_ip_dirty = false;
+    }
+
+    /// Run the enter/exit shell detached, so the dialog keeps drawing while the radio comes up.
+    fn run_direct_script(&self, enter: bool) {
+        let script = if enter { DIRECT_ENTER } else { DIRECT_EXIT };
+        let _ = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("{} >/dev/null 2>&1", script))
+            .spawn();
+    }
+
+    /// The address the WiFi link came up on, and the frontend's bake hook for it. The dialog's own
+    /// lines are baked once at boot, but this one is whatever DHCP handed out, so the frontend
+    /// bakes it when `direct_ip_dirty` says it has arrived.
+    pub fn direct_ip_dirty(&self) -> bool {
+        self.direct_ip_dirty
+    }
+
+    pub fn direct_ip_str(&self) -> Option<&str> {
+        self.direct_ip.as_deref()
+    }
+
+    pub fn set_direct_ip_face(&mut self, face: Option<(TexId, u32, u32)>) {
+        self.direct_ip_face = face;
+    }
+
+    pub fn clear_direct_ip_dirty(&mut self) {
+        self.direct_ip_dirty = false;
+    }
+
     /// The picker, but only once it has started opening: `None` while it is still standing on
     /// the shelf waiting for this cart's faces, so nothing of it is on screen yet and the row
     /// has not made way for it.
@@ -2514,6 +3619,10 @@ impl App {
         let board = board_at(progress);
         let zoom = board_zoom(board);
         let ready = self.core_faces_ready();
+        // A card that supplies its own board has the chips drawn into the art, so there is
+        // nothing for the picker to place: no sockets, no chip, and no shadow for a chip that
+        // is not coming across. What is left of the picker on such a card is the two lamps.
+        let own_board = slot_ui::board_art().is_some();
 
         if ready {
             // Opaque from the first frame, and the sockets and the chip with it: the back half
@@ -2527,6 +3636,35 @@ impl App {
                     tex,
                     alpha: 1.0,
                 });
+            }
+            // The card's board carries its own chips, so the lamps are the whole of what the
+            // picker adds: the one the cursor is over lit orange, the other out, and the lit one
+            // green once the choice has been made and the picker is on its way out. Nothing is
+            // baked into the board texture, because the state changes every press.
+            if let Some(art) = slot_ui::board_art() {
+                let chip = picker.chip(now);
+                let here = usize::from(chip.across >= 0.5);
+                let done = picker.closing();
+                for (i, lamp) in art.lamps.iter().enumerate() {
+                    let colour = if i == here {
+                        if done {
+                            [0.18, 0.76, 0.37, 1.0]
+                        } else {
+                            [1.0, 0.55, 0.10, 1.0]
+                        }
+                    } else {
+                        // Out, but not invisible: against the board's own plastic a dark lamp
+                        // reads as a hole rather than as a lamp that is off.
+                        [0.62, 0.62, 0.65, 1.0]
+                    };
+                    out.push(Draw::Rect {
+                        x: board.x + lamp.x * board.w,
+                        y: board.y + lamp.y * board.h,
+                        w: lamp.w * board.w,
+                        h: lamp.h * board.h,
+                        colour,
+                    });
+                }
             }
             // A face drawn at its own size is only sharp on whole pixels.
             for (i, tex) in self.core_socket_faces.iter().copied().enumerate() {
@@ -2543,7 +3681,7 @@ impl App {
 
             let chip = picker.chip(now);
             let u = CHIP_U[0] + (CHIP_U[1] - CHIP_U[0]) * chip.across;
-            if chip.lift > 0.0 {
+            if !own_board && chip.lift > 0.0 {
                 if let Some(tex) = self.core_chip_shadow_face {
                     // Under the body's middle and 90 units down the board, where the mockup's
                     // oval falls: low enough to read as cast on the board rather than tucked
@@ -2560,9 +3698,16 @@ impl App {
                     });
                 }
             }
-            let face = match chip.seated {
-                Some(core) => self.core_chip_faces.get(core.index()).copied(),
-                None => self.core_blank_chip_face,
+            // The blank stand-in is for a chip in flight, and there is no chip to fly across a
+            // board that has its own: drawn anyway it would be a grey chip flashing over a
+            // finished board, which is worse than nothing.
+            let face = if own_board {
+                None
+            } else {
+                match chip.seated {
+                    Some(core) => self.core_chip_faces.get(core.index()).copied(),
+                    None => self.core_blank_chip_face,
+                }
             };
             if let Some(tex) = face {
                 let (x, y) = on_board(board, u, CHIP_V - HOP_LIFT * chip.lift);
@@ -2757,7 +3902,38 @@ impl App {
         }
     }
 
-    /// A short B on the shelf: star the cart under the caret, or take the star back.
+    /// A hold of Y: swap which machine's shelf is up. Spent like `fav_hold`, so it fires once
+    /// rather than on every timer tick the button stays down.
+    fn sys_hold(&mut self) {
+        let Some(at) = self.sys_held else {
+            return;
+        };
+        if !self.on_shelf() {
+            self.sys_held = None;
+            return;
+        }
+        if self.now().saturating_sub(at) >= PLAY_HOLD_MS {
+            self.sys_held = None;
+            self.cycle_system();
+        }
+    }
+
+    /// A hold of B: open the direct-connect dialog. Spent like `fav_hold`.
+    fn mtp_hold(&mut self) {
+        let Some(at) = self.mtp_held else {
+            return;
+        };
+        if !self.on_shelf() {
+            self.mtp_held = None;
+            return;
+        }
+        if self.now().saturating_sub(at) >= PLAY_HOLD_MS {
+            self.mtp_held = None;
+            self.open_direct_link();
+        }
+    }
+
+    /// A short X on the shelf: star the cart under the caret, or take the star back.
     /// The star is the whole of the feedback — it appears on the cart, which is where the
     /// user is already looking.
     fn toggle_favorite(&mut self) {
@@ -2770,31 +3946,36 @@ impl App {
         self.persist();
         // The favourites shelf shows the starred carts and nothing else, so a cart that just
         // lost its star has to leave the view it is standing in.
-        if self.shelf.filtered() {
+        if self.fav_view {
             self.show_favorites();
         }
     }
 
-    /// A hold of B: swap between the whole library and the starred carts.
+    /// A hold of X: swap between the whole of the current machine's shelf and its starred
+    /// carts. The library is three machines and only one shelf is up, so "the whole shelf" is
+    /// this machine's carts, not all of them.
     fn toggle_fav_view(&mut self) {
-        if self.shelf.filtered() {
+        if self.fav_view {
             self.show_all();
         } else {
             self.show_favorites();
         }
     }
 
+    /// The whole of the machine whose shelf is up — what leaving the favourites sub-view
+    /// returns to.
     fn show_all(&mut self) {
         let keep = self.shelf.current_cart().map(|c| c.stem.clone());
-        let view = (0..self.shelf.carts.len()).collect();
+        let view = self.system_view(self.shelf_system);
+        self.fav_view = false;
         self.shelf.set_view(view, keep.as_deref());
         self.retally_letters();
     }
 
-    /// The starred carts, in library order so a cart sits on the same shelf, at the same
-    /// place among its neighbours, as the one it came from. Refused rather than shown empty
-    /// when nothing is starred: an empty shelf is a screen with nothing on it and no way to
-    /// tell why.
+    /// The starred carts of the machine whose shelf is up, in library order so a cart sits on
+    /// the same shelf, at the same place among its neighbours, as the one it came from.
+    /// Refused rather than shown empty when nothing is starred: an empty shelf is a screen with
+    /// nothing on it and no way to tell why.
     fn show_favorites(&mut self) {
         let keep = self.shelf.current_cart().map(|c| c.stem.clone());
         let view: Vec<usize> = self
@@ -2802,12 +3983,15 @@ impl App {
             .carts
             .iter()
             .enumerate()
-            .filter(|(_, c)| self.state.favorites.contains(&c.stem))
+            .filter(|(_, c)| {
+                c.system() == self.shelf_system && self.state.favorites.contains(&c.stem)
+            })
             .map(|(i, _)| i)
             .collect();
         if view.is_empty() {
             return self.refuse();
         }
+        self.fav_view = true;
         self.shelf.set_view(view, keep.as_deref());
         self.retally_letters();
     }
@@ -2829,8 +4013,10 @@ impl App {
     /// pinned above the object. Scaled with the cart, so the enlarged selection wears a larger
     /// star and the row still reads as one row.
     fn draw_fav_stars(&self, out: &mut Vec<Draw>) {
-        /// Where the label starts, as a fraction of the cart's height: `label_panel`'s 22.8%.
-        const GRIP: f32 = 0.228;
+        /// How tall the mark is on a cart, in screen pixels. Absolute rather than a share of the
+        /// cart, because it is a reading and not part of the artwork: a star that grew with the
+        /// selected cart would say the cart was more of a favourite than its neighbours.
+        const STAR_PX: f32 = 20.0;
         let Some((tex, w, h)) = self.fav_star else {
             return;
         };
@@ -2846,10 +4032,20 @@ impl App {
             {
                 continue;
             }
-            let sh = r.h * GRIP * 0.60;
-            let sw = w * (sh / h);
-            let x = r.x + (r.w - sw) / 2.0;
-            let y = r.y + (r.h * GRIP - sh) / 2.0;
+            let (sh, sw) = (STAR_PX, w * (STAR_PX / h));
+            // Centred on the label's top right corner: the corner of the paper, which is the one
+            // piece of the cart that is the same on every machine's artwork and the place the eye
+            // already goes. A card that supplies its own art says where its label is — the
+            // magenta slot the label is actually fitted into — and that answer has to be used,
+            // because it is not the built-in panel. Without one, the panel stands in.
+            let corner = slot_ui::cart_label_share(self.shelf.system())
+                .map(|(_, y0, x1, _)| (r.x + x1 * r.w, r.y + y0 * r.h))
+                .unwrap_or_else(|| {
+                    let (_, y0, x1, _) = self.shelf.size().label_panel_at(r.w as u32, r.h as u32);
+                    (r.x + x1 as f32, r.y + y0 as f32)
+                });
+            let x = corner.0 - sw / 2.0;
+            let y = corner.1 - sh / 2.0;
             // A bloom under it: the same star, larger and faint, so it reads as light coming
             // off the glyph rather than as a second outline. One extra quad, and the linear
             // tap on an upscaled alpha map is the blur — no pass and no blur shader.
@@ -2877,8 +4073,11 @@ impl App {
     /// the time: hollow while the ordinary shelf is showing, solid and yellow while the
     /// favourites are. A reading rather than a control — the hold of B is the control — so it
     /// never looks like something to press.
+    ///
+    /// The mode badge (sun in light, moon in dark) is not here: it is printed beside the clock at
+    /// the top of the band, where it reads as part of the same row of type.
     fn draw_fav_indicator(&self, out: &mut Vec<Draw>) {
-        let lit = self.shelf.filtered();
+        let lit = self.fav_view;
         let Some((tex, w, h)) = (if lit {
             self.fav_ind.map(|p| p.1)
         } else {
@@ -2886,14 +4085,22 @@ impl App {
         }) else {
             return;
         };
-        let (w, h) = (w as f32, h as f32);
-        let x = OUT_W as f32 - w - FAV_IND_MARGIN;
-        let y = OUT_H as f32 - h - FAV_IND_MARGIN;
+        if h == 0 {
+            return;
+        }
+        let k = FAV_IND_DRAW / h as f32;
+        let (sw, sh) = (w as f32 * k, FAV_IND_DRAW);
+        // Centred on the battery reading's own centre at the other end of the top band, so the two
+        // right-hand marks stand in one column.
+        let read_right = OUT_W as f32 - STATUS_READ_MARGIN;
+        let read_cx = read_right - self.battery_percent.w as f32 / 2.0;
+        let ind_x = read_cx - sw / 2.0;
+        let y = OUT_H as f32 - MOUTH_H + MOUTH_H / 2.0 - sh / 2.0;
         out.push(Draw::Tex {
-            x,
+            x: ind_x,
             y,
-            w,
-            h,
+            w: sw,
+            h: sh,
             tex,
             alpha: 1.0,
         });
@@ -2926,6 +4133,7 @@ impl App {
         // one caller that happened to need it.
         self.close_game_menu();
         self.close_cheat_menu();
+        self.close_palette_browser();
         self.flush_eject(&cart);
         // The offer names a file in this cart's ring and a state only this cart's core can
         // read. Carried across the slot it would delete or load the wrong one.
@@ -2951,8 +4159,12 @@ impl App {
             eprintln!("slot: eject: the core gave up no state");
             return;
         };
+        let Some(system) = self.system_of(stem) else {
+            eprintln!("slot: eject: no cart in the shelf for {stem}");
+            return;
+        };
         let (state, sav) = trusted_write(snapshot.as_ref(), state, "eject");
-        match persist::eject(root, self.core, stem, state.as_deref(), sav.as_deref()) {
+        match persist::eject(root, self.core, system, stem, state.as_deref(), sav.as_deref()) {
             Ok(()) => self.state.cart = None,
             Err(e) => eprintln!("slot: eject: {e}"),
         }
@@ -3000,6 +4212,7 @@ impl App {
         // running behind it would keep a radio up through the doze.
         self.close_game_menu();
         self.close_cheat_menu();
+        self.close_palette_browser();
         // A shut lid is walking away, not choosing. Nothing is written and nothing animates:
         // waking comes back to a plain shelf.
         self.core_picker = None;
@@ -3160,6 +4373,12 @@ impl App {
         std::mem::take(&mut self.mode_dirty)
     }
 
+    /// Whether a shelf swap has left the row's frame cut for the wrong machine. Taken once by
+    /// the frontend, which has the only compositor.
+    pub(crate) fn take_shelf_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.shelf_dirty)
+    }
+
     /// SELECT+START: print the device the other way round.
     ///
     /// Three things, and the order is the order they have to happen in. The palette moves
@@ -3174,6 +4393,13 @@ impl App {
     pub(crate) fn toggle_mode(&mut self) {
         let mode = slot_ui::palette::mode().other();
         slot_ui::palette::set_mode(mode);
+        // A theme change repaints everything the palette touches: the fixed furniture (icons,
+        // favourite stars, machine logos), the lazy caches (shelf title, clock, charge, about,
+        // switcher), and the cart faces — which bake the shell colour in light mode
+        // (`housing()`). `mode_dirty` pokes the frontend, which re-runs `rebake` in place on the
+        // next frame: it re-rasterises the fixed faces and the visible shelf window, and drops
+        // the rest so the resident pump rebuilds each as the caret reaches it. That is the whole
+        // job a restart did, without re-running the boot — so no restart here.
         self.state.mode = mode;
         self.mode_dirty = true;
         self.persist();
@@ -3195,6 +4421,137 @@ impl App {
     /// Closes the table without touching any code's state.
     fn close_cheat_menu(&mut self) {
         self.cheat_menu = None;
+    }
+
+    /// `Some(cell)` while the palette browser is up, `None` otherwise. Read by `Session` to pause
+    /// the core and to keep the pad out of it, the same way it reads the cheat table.
+    pub fn palette_browser(&self) -> Option<usize> {
+        self.pal_cursor
+    }
+
+    /// Hold of the palette key: the browser, on the page the key is walking, with the caret on the
+    /// palette that is actually up.
+    ///
+    /// A Game Boy's list is hundreds of entries and this is the only way to see them; the colour
+    /// machines have seven and no browser at all. Only while a game is running, too: there is no
+    /// picture on the shelf to recolour, and a hold there is simply nothing.
+    ///
+    /// **Refused while a model is up**, for the reason `cycle_cc` gives: a model's four shades are
+    /// bound to its screen art, so a browser that offered to recolour the picture inside that case
+    /// would be offering something it could not then do. Refused rather than dropped, so the press
+    /// reads as answered.
+    fn open_palette_browser(&mut self) {
+        if self.pal_cursor.is_some() || self.current_machine() != System::Gb {
+            return;
+        }
+        if !matches!(self.phase, Phase::Playing { .. }) {
+            return;
+        }
+        if App::model_of_index(self.overlay_slot, self.overlay_index).is_some() {
+            self.refuse();
+            return;
+        }
+        let base = self.pal_page * slot_ui::PALETTE_PER_PAGE;
+        self.pal_cursor = Some(self.gb_palette().saturating_sub(base));
+    }
+
+    fn close_palette_browser(&mut self) {
+        self.pal_cursor = None;
+    }
+
+    /// The browser owns every button on the game's side while it is up. The arrows ring inside the
+    /// page — a row down is three cells — L and R turn the page, A takes the palette under the
+    /// caret and B leaves without it.
+    ///
+    /// The caret rings rather than stops at the edges because the page is what bounds it, and L/R
+    /// are the way out; a caret that could reach an edge and stop would be a caret the user has to
+    /// find their way back from.
+    fn palette_browser_input(&mut self, action: Action) {
+        let Some(cursor) = self.pal_cursor else {
+            return;
+        };
+        let total = crate::palettes::GB_PALETTES.len();
+        let per = slot_ui::PALETTE_PER_PAGE;
+        match action {
+            Action::GbaDown(Btn::Left) | Action::ShelfLeft => {
+                self.pal_cursor = Some(slot_store::step_cursor(self.pal_page, cursor, -1, total, per));
+            }
+            Action::GbaDown(Btn::Right) | Action::ShelfRight => {
+                self.pal_cursor = Some(slot_store::step_cursor(self.pal_page, cursor, 1, total, per));
+            }
+            Action::GbaDown(Btn::Up) => {
+                self.pal_cursor = Some(slot_store::step_cursor(self.pal_page, cursor, -3, total, per));
+            }
+            Action::GbaDown(Btn::Down) => {
+                self.pal_cursor = Some(slot_store::step_cursor(self.pal_page, cursor, 3, total, per));
+            }
+            Action::GbaDown(Btn::L1) | Action::GbaDown(Btn::R1) => {
+                // The caret is a cell on the old page, so a shorter page it arrives on clamps it
+                // rather than dropping it off the end. Only the last page is short, and only by
+                // thirteen cells, so this is one press of the boundary rather than a rule.
+                let delta = if action == Action::GbaDown(Btn::L1) {
+                    -1
+                } else {
+                    1
+                };
+                self.pal_page = slot_store::step_page(self.pal_page, delta, total, per);
+                let n = slot_store::len_on(self.pal_page, total, per);
+                self.pal_cursor = Some(cursor.min(n.saturating_sub(1)));
+            }
+            Action::GbaDown(Btn::A) => {
+                let picked = slot_store::index_of(self.pal_page, cursor, total, per);
+                self.display.cc[DisplayFilter::machine_slot(System::Gb)] = picked as u16;
+                if let Some(root) = &self.root {
+                    crate::root::write_display_modes(root, self.display.mask_mode, self.display.cc);
+                }
+                self.close_palette_browser();
+            }
+            Action::GbaDown(Btn::B) => self.close_palette_browser(),
+            _ => {}
+        }
+    }
+
+    /// The name of the entry under the browser's caret, or `None` while it is shut. The frontend
+    /// mints a face from this and nothing else; comparing it to the last one it built is what
+    /// keeps a moved caret to one rasterise and a still one to none.
+    pub fn palette_name_want(&self) -> Option<String> {
+        let cursor = self.pal_cursor?;
+        let per = slot_ui::PALETTE_PER_PAGE;
+        let total = crate::palettes::GB_PALETTES.len();
+        let at = slot_store::index_of(self.pal_page, cursor, total, per);
+        Some(crate::palettes::GB_PALETTES[at].0.to_string())
+    }
+
+    /// The face the frontend built for that name.
+    pub(crate) fn set_palette_name_face(&mut self, face: Option<(TexId, u32, u32)>) {
+        self.pal_name = face;
+    }
+
+    /// The palette browser, over the paused game. Only ever up over a cart in the slot, so the
+    /// `Phase::Playing` arm of `draw` is the only caller.
+    fn draw_palette_browser(&self, out: &mut Vec<Draw>) {
+        let Some(cursor) = self.pal_cursor else {
+            return;
+        };
+        let per = slot_ui::PALETTE_PER_PAGE;
+        let total = crate::palettes::GB_PALETTES.len();
+        let base = (self.pal_page * per).min(total);
+        let n = slot_store::len_on(self.pal_page, total, per);
+        // A copy of the page's four shades, at most fifteen entries and only while the browser is
+        // open. The alternative is a second compile-time array of the same 347 rows, which is
+        // exactly the parallel table that drifts the first time one of them is edited.
+        let shades: Vec<[[u8; 3]; 4]> = crate::palettes::GB_PALETTES[base..base + n]
+            .iter()
+            .map(|entry| entry.1)
+            .collect();
+        let view = slot_ui::PaletteView {
+            page: self.pal_page,
+            cursor,
+            pages: slot_ui::palette_pages(total),
+            shades: &shades,
+            name: self.pal_name,
+        };
+        slot_ui::draw_palette_browser(&view, out);
     }
 
     /// The master switch behind SELECT+A's second press: flips the lot on or off at once.
@@ -3344,6 +4701,13 @@ impl App {
         let Some(cart) = self.shelf.current_cart() else {
             return;
         };
+        // Nothing to choose for anything that is not a GBA cart: gpSP does not take Game Boy,
+        // so mGBA is not a preference to record but the only answer there is. The picker is two
+        // sockets to hop between, and opening it over one socket is a question that can only be
+        // refused.
+        if cart.system() != System::Gba {
+            return;
+        }
         let seat = slot_store::core_for(&root, &cart.stem);
         let now = self.now();
         let mut picker = CorePicker::open(seat, now);
@@ -3357,6 +4721,8 @@ impl App {
         self.shelf.release_hold();
         self.play_held = None;
         self.fav_held = None;
+        self.sys_held = None;
+        self.mtp_held = None;
     }
 
     /// Whether the board and lid on the GPU are the highlighted cart's, so its open can start.
@@ -3613,6 +4979,7 @@ impl App {
         }
         self.close_game_menu();
         self.close_cheat_menu();
+        self.close_palette_browser();
         self.powering_off = true;
         self.act_at = self.now() + SHUTDOWN_SHOW_MS;
         self.set_led(LedState::Off);
@@ -3661,19 +5028,37 @@ impl App {
             eprintln!("slot: flush: the core gave up no state");
             return;
         };
+        let Some(system) = self.system_of(cart) else {
+            eprintln!("slot: flush: no cart in the shelf for {cart}");
+            return;
+        };
         let (state, sav) = trusted_write(snapshot.as_ref(), state, "flush");
-        if let Err(e) = persist::flush(root, self.core, cart, state.as_deref(), sav.as_deref()) {
+        if let Err(e) =
+            persist::flush(root, self.core, system, cart, state.as_deref(), sav.as_deref())
+        {
             eprintln!("slot: flush: {e}");
         }
     }
 
     /// The ring for the cart in the slot. `None` outside the binary, where there is no
     /// content root, which reads as a cart that has never been saved.
+    /// The machine of the cart that owns `stem` — the folder its save and its states live under.
+    /// Read from the shelf rather than kept on `App`, because the shelf already carries every
+    /// cart's machine and a second copy is exactly the thing that drifts.
+    fn system_of(&self, stem: &str) -> Option<System> {
+        self.shelf
+            .carts
+            .iter()
+            .find(|c| c.stem == stem)
+            .map(|c| c.system())
+    }
+
     fn ring(&self) -> Option<StateRing> {
         let (Some(root), Some(cart)) = (&self.root, self.seated()) else {
             return None;
         };
-        Some(StateRing::new(root, self.core, cart))
+        let system = self.system_of(cart)?;
+        Some(StateRing::new(root, self.core, system, cart))
     }
 
     fn seated(&self) -> Option<&str> {
@@ -3898,8 +5283,8 @@ impl App {
         }
     }
 
-    /// The star a favourite wears, the indicator unlit, and the indicator lit, each with the
-    /// size it was rasterised at. Uploaded at boot: none of them ever changes.
+    /// The mark a favourite wears, and the corner indicator on the ordinary shelf and in the
+    /// favourites, each with the size it was rasterised at. Uploaded at boot: none of them changes.
     pub fn set_fav_faces(
         &mut self,
         star: (TexId, u32, u32),

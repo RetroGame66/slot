@@ -129,12 +129,17 @@ impl Row {
 /// The descriptions are written to a budget rather than merely translated, and the budget is a
 /// number rather than a feel: the column is `DESC_X`..`ROW_W` — 340 pixels, 290 for a key line —
 /// and `fit` shrinks whatever will not fit. An over-long row is therefore not a failure; it is one
-/// row set smaller than the other seventeen, which is worse, because nothing reports it. Chinese
-/// says these in four to six characters and uses half the column; the English below was shortened
-/// until it measured inside it, which is why several read terser than the Chinese they answer.
-/// Whoever edits either table should measure again — the widest line here is 337 of 340.
+/// row set smaller than the others, which is worse, because nothing reports it. Chinese says these
+/// in four to six characters and uses half the column; the English below was shortened until it
+/// measured inside it, which is why several read terser than the Chinese they answer.
+///
+/// Whoever edits either table should measure again. The two walls are the tight ones, not the
+/// card: a key line may reach `DESC_X - HALO_PX` (319) — the widest is `存档 / 读取最近的存档`
+/// (English: `Save / load latest`) at 317 — and a description may reach `ROW_W` (660) — the widest
+/// is `蓝光滤镜（任何界面都可调）` at 633. The row count is the array's own type, so a row added
+/// without changing `27` does not compile.
 #[cfg(not(feature = "lang-en"))]
-pub const ROWS: [Row; 22] = [
+pub const ROWS: [Row; 27] = [
     Row::Head("货架界面"),
     Row::Key(
         &[
@@ -151,19 +156,24 @@ pub const ROWS: [Row; 22] = [
     ),
     Row::Key(&[Seg::Sep("轻点"), Seg::Btn("A")], "从最近的即时存档继续"),
     Row::Key(&[Seg::Sep("长按"), Seg::Btn("A")], "把这个游戏从头开始"),
-    Row::Key(&[Seg::Sep("轻点"), Seg::Btn("B")], "收藏 / 取消收藏这张卡"),
-    Row::Key(&[Seg::Sep("长按"), Seg::Btn("B")], "收藏夹 / 全部"),
+    Row::Key(&[Seg::Sep("轻点"), Seg::Btn("X")], "收藏 / 取消收藏这张卡"),
+    Row::Key(&[Seg::Sep("长按"), Seg::Btn("X")], "收藏夹 / 全部"),
+    Row::Key(&[Seg::Sep("长按"), Seg::Btn("Y")], "切换机种货架"),
     Row::Key(&[Seg::Btn("START")], "为这张卡挑一个模拟器"),
     Row::Key(&[Seg::Btn("MENU")], "关于页与快捷键说明"),
+    // SELECT+Y rather than SELECT+X/Y, and the difference is the screen, not the chord: the
+    // panel mask is the game panel's alone, while colour correction also recolours the carts
+    // themselves and so is the one of the pair that answers here. The mask keeps its own row
+    // under "游戏中", where it actually does something.
     Row::Key(
-        &[
-            Seg::Btn("SELECT"),
-            Seg::Sep("+"),
-            Seg::Btn("X"),
-            Seg::Sep("/"),
-            Seg::Btn("Y"),
-        ],
-        "面板遮罩 / 色彩校正",
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("Y")],
+        "色彩校正（含卡带）",
+    ),
+    // SELECT+START lands here and nowhere else: the case and the index are what the other
+    // mode reprints, and both of them are on this screen.
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("START")],
+        "日间 / 夜间主题",
     ),
     Row::Key(
         &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("音量 ±")],
@@ -215,6 +225,35 @@ pub const ROWS: [Row; 22] = [
     ),
     Row::Key(
         &[
+            Seg::Btn("SELECT"),
+            Seg::Sep("+"),
+            Seg::Btn("X"),
+            Seg::Sep("/"),
+            Seg::Btn("Y"),
+        ],
+        "面板遮罩 / 色板轮换",
+    ),
+    // The hold half of the same chord, and the only row that names a panel. On a Game Boy
+    // SELECT+X steps the screen art and SELECT+Y the palette, so the browser hangs off the one
+    // that already means "the colours" — a tap walks the page, a hold opens the browser.
+    Row::Key(
+        &[
+            Seg::Sep("长按"),
+            Seg::Btn("SELECT"),
+            Seg::Sep("+"),
+            Seg::Btn("Y"),
+        ],
+        "色板浏览器（GB）",
+    ),
+    // The `Overlay/` art — a different thing from the panel mask three rows up, and the only
+    // one of the two that is a picture rather than a filter. GB and GBC only: there is no GBA
+    // overlay, so the row would be dead on a GBA cart.
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("R2")],
+        "屏幕遮罩（仅 GB/GBC）",
+    ),
+    Row::Key(
+        &[
             Seg::Sep("长按"),
             Seg::Btn("L2"),
             Seg::Sep("/"),
@@ -241,7 +280,7 @@ pub const ROWS: [Row; 22] = [
 /// is what it is: the order, the key lines and the counts are identical, and only the words move.
 /// Measured against the column budget above, not eyeballed — see the note on the Chinese table.
 #[cfg(feature = "lang-en")]
-pub const ROWS: [Row; 22] = [
+pub const ROWS: [Row; 27] = [
     Row::Head("On the shelf"),
     Row::Key(&[Seg::Btn("D-PAD"), Seg::Sep("L/R")], "Browse carts"),
     // `L1`/`R1` rather than the Chinese card's `L / R`: the two names would collide with the
@@ -252,19 +291,18 @@ pub const ROWS: [Row; 22] = [
     ),
     Row::Key(&[Seg::Sep("Tap"), Seg::Btn("A")], "Resume last save"),
     Row::Key(&[Seg::Sep("Hold"), Seg::Btn("A")], "Restart the game"),
-    Row::Key(&[Seg::Sep("Tap"), Seg::Btn("B")], "Star this cart"),
-    Row::Key(&[Seg::Sep("Hold"), Seg::Btn("B")], "Favourites / all"),
+    Row::Key(&[Seg::Sep("Tap"), Seg::Btn("X")], "Star this cart"),
+    Row::Key(&[Seg::Sep("Hold"), Seg::Btn("X")], "Favourites / all"),
+    Row::Key(&[Seg::Sep("Hold"), Seg::Btn("Y")], "Cycle the machine"),
     Row::Key(&[Seg::Btn("START")], "Pick the core"),
     Row::Key(&[Seg::Btn("MENU")], "About & shortcuts"),
     Row::Key(
-        &[
-            Seg::Btn("SELECT"),
-            Seg::Sep("+"),
-            Seg::Btn("X"),
-            Seg::Sep("/"),
-            Seg::Btn("Y"),
-        ],
-        "Mask / colour",
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("Y")],
+        "Colour (with carts)",
+    ),
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("START")],
+        "Day / night theme",
     ),
     Row::Key(
         &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("VOL ±")],
@@ -301,6 +339,29 @@ pub const ROWS: [Row; 22] = [
     Row::Key(
         &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("A")],
         "Cheat list",
+    ),
+    Row::Key(
+        &[
+            Seg::Btn("SELECT"),
+            Seg::Sep("+"),
+            Seg::Btn("X"),
+            Seg::Sep("/"),
+            Seg::Btn("Y"),
+        ],
+        "Mask / palette",
+    ),
+    Row::Key(
+        &[
+            Seg::Sep("Hold"),
+            Seg::Btn("SELECT"),
+            Seg::Sep("+"),
+            Seg::Btn("Y"),
+        ],
+        "Palette browser (GB)",
+    ),
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("R2")],
+        "Screen art (GB/GBC)",
     ),
     Row::Key(
         &[

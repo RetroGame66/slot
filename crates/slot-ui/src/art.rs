@@ -90,6 +90,14 @@ fn decode(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
     Some((rgba, info.width, info.height))
 }
 
+/// Decodes `path` to straight RGBA with no scaling, as raw cover art needs. The one entry
+/// point the rest of slot uses to read a PNG the user dropped on the card: a screen overlay
+/// (`Overlay/GB/GB.png`, `Overlay/GBC/GBC.png`) is read through this so a missing or corrupt
+/// file is simply `None` — the built-in look stands — rather than an error worth a log line.
+pub fn decode_rgba(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
+    decode(path)
+}
+
 /// The traced shape, at the size the face wants. `tiny_skia` hands back premultiplied RGBA,
 /// which is the same thing straight through wherever alpha is 0 or 255, but every caller here
 /// pastes this over another face or hands it to the sprite pass expecting straight alpha — so

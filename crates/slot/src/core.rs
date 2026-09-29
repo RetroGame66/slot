@@ -57,8 +57,8 @@ fn candidates(root: &Path, core: Core) -> Vec<PathBuf> {
 /// what the caller does with that `Core` afterward: `App` is the one that has to keep using
 /// the same value for every later read and write, and it does that by storing it rather than
 /// asking again.
-pub fn open_core(root: &Path, core: Core) -> Box<dyn RetroCore> {
-    open_core_for(root, core, &candidates(root, core))
+pub fn open_core(root: &Path, core: Core, system: slot_store::System) -> Box<dyn RetroCore> {
+    open_core_for(root, core, system, &candidates(root, core))
 }
 
 /// The named core if one of these opens, the mock if none of them do. A missing core is not
@@ -74,14 +74,40 @@ pub fn open_core(root: &Path, core: Core) -> Box<dyn RetroCore> {
 /// call it on: everything above here deals in `Box<dyn RetroCore>`, which has no `set_option`.
 /// That is also why the call sits here rather than at a caller — after `open_with` succeeds,
 /// before the `Box<dyn RetroCore>` is handed back and `load` becomes reachable at all.
-pub fn open_core_for(root: &Path, core: Core, paths: &[PathBuf]) -> Box<dyn RetroCore> {
+pub fn open_core_for(
+    root: &Path,
+    core: Core,
+    system: slot_store::System,
+    paths: &[PathBuf],
+) -> Box<dyn RetroCore> {
     let bios = root::bios_dir(root);
-    let saves = root::saves_dir(root);
+    let saves = root::saves_dir(root, system);
+    // mGBA reads `mgba_sgb_borders` and `mgba_gb_colors` during `retro_init` — both are
+    // marked "requires restart", so they have to be present in the host before `open_with`
+    // runs the core's init, and `apply_core_options` (which runs after `open_with`) would be
+    // too late.
+    //
+    //  - `mgba_sgb_borders = OFF`: SLOT draws its own Game Boy bezel for every GB/GBC cart,
+    //    so mGBA's Super Game Boy border would only double up; turn it off.
+    //  - `mgba_gb_colors = Grayscale`: the "Default Game Boy Palette" — the palette mGBA uses
+    //    for plain DMG Game Boy carts (anything not GBC/SGB-compatible). Forcing it to
+    //    Grayscale makes every monochrome GB game render as true black & white, so SLOT's
+    //    colour-correction filters (NOCOLOR, DMG-green / ice-blue / amber / pink backlights)
+    //    ride on a clean grayscale base instead of mGBA's colourised one. GBC and GBA carts
+    //    ignore it — GBC uses its own ROM palettes, GBA is not GB — so setting it for every
+    //    mGBA cart is harmless.
+    //
+    // gpSP's one option (`gpsp_serial`) is read at `retro_load_game`, so it stays in
+    // `apply_core_options`.
+    let initial_options: Vec<(&str, &str)> = match core {
+        Core::Mgba => vec![("mgba_sgb_borders", "OFF"), ("mgba_gb_colors", "Grayscale")],
+        Core::Gpsp => vec![],
+    };
     for path in paths {
         if !path.exists() {
             continue;
         }
-        match LibretroCore::open_with(path, &bios, &saves) {
+        match LibretroCore::open_with(path, &bios, &saves, &initial_options) {
             Ok(mut opened) => {
                 apply_core_options(&mut opened, core);
                 eprintln!("slot: core {}", path.display());

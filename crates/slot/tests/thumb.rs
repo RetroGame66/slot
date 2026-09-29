@@ -18,7 +18,7 @@ fn a_thumbnail_keeps_the_frames_colours() {
     for px in frame.chunks_exact_mut(4) {
         px.copy_from_slice(&[0x20, 0x40, 0xd0, 0xff]);
     }
-    let encoded = thumb::png(&frame).expect("encode");
+    let encoded = thumb::png(&frame, GBA_W, GBA_H).expect("encode");
     let (rgb, w, h) = decode(&encoded);
     assert_eq!((w, h), (GBA_W, GBA_H));
     assert_eq!(&rgb[..3], &[0xd0, 0x40, 0x20]);
@@ -28,6 +28,6 @@ fn a_thumbnail_keeps_the_frames_colours() {
 /// truncated read of one is worse than no polaroid at all.
 #[test]
 fn a_short_frame_is_not_a_thumbnail() {
-    assert!(thumb::png(&[]).is_none());
-    assert!(thumb::png(&vec![0u8; (GBA_W * GBA_H * 4) as usize - 4]).is_none());
+    assert!(thumb::png(&[], GBA_W, GBA_H).is_none());
+    assert!(thumb::png(&vec![0u8; (GBA_W * GBA_H * 4) as usize - 4], GBA_W, GBA_H).is_none());
 }

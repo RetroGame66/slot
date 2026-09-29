@@ -152,6 +152,7 @@ impl Hud {
         self.said = Some((toast, now));
     }
 
+
     pub fn toast_visible(&self, now: Millis) -> bool {
         self.toast_alpha(now) > 0.0
     }

@@ -3,10 +3,12 @@ use slot_power::Battery;
 use slot_store::{parse_stamp, StateEntry};
 
 use crate::art;
-use crate::battery::{draw_gauge, GAUGE_H};
+use crate::battery::{cluster_h, draw_gauge};
 use crate::hud::PLATE_H;
 use crate::palette;
-use crate::plate::{hint_quad, hint_row, hint_width, Hint, HINT_GAP, HINT_H, TITLE_H, TITLE_W};
+use crate::plate::{
+    hint_quad, hint_row, hint_width, Hint, HINT_GAP, HINT_H, STATUS_H, TITLE_H, TITLE_W,
+};
 use crate::status::{draw_printed, Printed};
 
 /// The screenshot is the screen. 240x160 scales to 720x480 at exactly 3x, the same integer
@@ -242,10 +244,16 @@ impl Polaroids {
         // whose face has not arrived yet still has to hold its space at the margin, not leave
         // the corner looking like nothing was ever going to sit there, which is the same
         // degenerate case it is here.
-        draw_printed(MARGIN, (PLATE_H - HINT_H as f32) / 2.0, clock, out);
+        draw_printed(
+            MARGIN,
+            (PLATE_H - STATUS_H as f32) / 2.0,
+            clock,
+            STATUS_H,
+            out,
+        );
         draw_gauge(
             OUT_W as f32 - MARGIN,
-            (PLATE_H - GAUGE_H) / 2.0,
+            (PLATE_H - cluster_h()) / 2.0,
             battery,
             battery_percent,
             bolt,
