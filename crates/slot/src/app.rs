@@ -3963,17 +3963,24 @@ impl App {
                     });
                 }
             }
-            // A face drawn at its own size is only sharp on whole pixels.
-            for (i, tex) in self.core_socket_faces.iter().copied().enumerate() {
-                let (x, y) = on_board(board, SOCKET_U[i], SOCKET_V);
-                out.push(Draw::Tex {
-                    x: x.round(),
-                    y: y.round(),
-                    w: SOCKET_W as f32 * zoom,
-                    h: SOCKET_H as f32 * zoom,
-                    tex,
-                    alpha: 1.0,
-                });
+            // The sockets are the **built-in** board's, and only its: a card that drew its own
+            // board drew its chips into it as well, so placing these two on top leaves two empty
+            // positions standing over a finished board — the picker's own furniture printed over
+            // somebody else's drawing. The chip below is gated for the same reason and always
+            // was; this loop was not, which is the pair of leftovers the player saw.
+            if !own_board {
+                // A face drawn at its own size is only sharp on whole pixels.
+                for (i, tex) in self.core_socket_faces.iter().copied().enumerate() {
+                    let (x, y) = on_board(board, SOCKET_U[i], SOCKET_V);
+                    out.push(Draw::Tex {
+                        x: x.round(),
+                        y: y.round(),
+                        w: SOCKET_W as f32 * zoom,
+                        h: SOCKET_H as f32 * zoom,
+                        tex,
+                        alpha: 1.0,
+                    });
+                }
             }
 
             let chip = picker.chip(now);
