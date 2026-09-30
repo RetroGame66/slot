@@ -3,23 +3,32 @@
 //!
 //! Rasterised whole rather than assembled from draw rects: the original has a rounded body, a
 //! die-cut notch and a white panel inset into one corner, and none of those are shapes a list
-//! of rectangles gets right. The binary uploads the face and re-rasterises it when the text
-//! changes, which is the same deal the shelf clock has.
+//! of rectangles gets right — and that plate is a **drawing the player supplied**, carried in the
+//! binary at this face's size rather than traced here, so what is on the label is what was drawn.
+//! Everything else (the model number, the gauge, the barcode, the wordmark, the credits) is set
+//! on top of it. The binary uploads the face and re-rasterises it when the text changes, which is
+//! the same deal the shelf clock has.
 
 use slot_gfx::{Draw, TexId};
 
-use crate::art::render_svg;
+use crate::art::decode_bytes;
 use crate::barcode::{code39, CODE39_NARROW, CODE39_WIDE};
 use crate::plate::UndoFace;
 use crate::text;
 
-/// The body and the barcode panel, traced from the article. The die cut and both corner radii
-/// come from here rather than from constants: the outline is the one part of this that is a
-/// drawing rather than a layout, and hand-fitting rectangles to it never quite landed.
-const STICKER_SVG: &str = include_str!("../assets/sticker.svg");
+/// The sticker's own body and barcode panel — **the artwork itself**, carried in the binary at
+/// this face's exact size (660x228). Laid down first; the model number, the gauge, the barcode,
+/// the wordmark and the credits are all set on top of it.
+///
+/// It used to be an SVG traced from the article and rendered here at boot. It is a PNG now, so
+/// what is on the label is exactly what was drawn rather than whatever a tracer made of it — and
+/// the size is the face's, checked on decode, because a plate that arrives the wrong size would
+/// otherwise be stretched into nonsense by the blit.
+const STICKER_PNG: &[u8] = include_bytes!("../assets/sticker-66mod.png");
 
-/// ANBERNIC RG SP, set as outlines. Where the article puts the console's own logo.
-const WORDMARK_SVG: &str = include_str!("../assets/wordmark.svg");
+/// ANBERNIC RG SP, set as outlines. Where the article puts the console's own logo. Its width is
+/// `WORDMARK_W` to the pixel; the height comes from the artwork's own aspect.
+const WORDMARK_PNG: &[u8] = include_bytes!("../assets/wordmark-66mod.png");
 
 /// How wide the lockup sits on the label. Set by its keyline rather than by the block it sits
 /// in: the outline is what makes it that logotype, and below about this width it thins to
@@ -128,10 +137,16 @@ struct Canvas {
 }
 
 impl Canvas {
-    /// The traced outline, rasterised. Everything else is set on top of it.
+    /// The plate, decoded. Everything else is set on top of it.
+    ///
+    /// The artwork is drawn at this face's size and carried at it, so the only failure worth
+    /// naming is a size that is not this face's — which reads as an absent plate rather than a
+    /// stretched one, because the fields still print over nothing.
     fn shape(w: u32, h: u32) -> Canvas {
-        let svg = STICKER_SVG;
-        let px = render_svg(svg, w, h).unwrap_or_else(|| vec![0; (w * h * 4) as usize]);
+        let px = decode_bytes(STICKER_PNG)
+            .filter(|(_, dw, dh)| (*dw, *dh) == (w, h))
+            .map(|(px, _, _)| px)
+            .unwrap_or_else(|| vec![0; (w * h * 4) as usize]);
         Canvas { px, w, h }
     }
 
@@ -390,13 +405,10 @@ pub fn sticker_face(f: &StickerFields) -> UndoFace {
 }
 
 /// The lockup at a given width, and the size it came back. `None` where the artwork will not
-/// parse, which draws no logo rather than no label.
+/// decode, or where it is not the width asked for — which draws no logo rather than no label.
 fn wordmark(w: u32) -> Option<(Vec<u8>, (u32, u32))> {
-    let svg = WORDMARK_SVG;
-    let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).ok()?;
-    let size = tree.size();
-    let h = (w as f32 * size.height() / size.width()).round() as u32;
-    Some((render_svg(svg, w, h)?, (w, h)))
+    let (px, dw, dh) = decode_bytes(WORDMARK_PNG)?;
+    (dw == w).then_some((px, (dw, dh)))
 }
 
 /// Centred on screen, at its own size. The label is an object being looked at rather than a

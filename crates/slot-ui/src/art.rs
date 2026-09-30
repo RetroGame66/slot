@@ -55,7 +55,18 @@ fn box_average(src: &[u8], sw: u32, sh: u32, x0: f32, y0: f32, x1: f32, y1: f32)
 
 fn decode(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
     let file = std::fs::File::open(path).ok()?;
-    let mut dec = png::Decoder::new(std::io::BufReader::new(file));
+    decode_reader(std::io::BufReader::new(file))
+}
+
+/// The same decode, from bytes the binary already carries. The two faces of the about screen —
+/// the sticker and the wordmark — are `include_bytes!` rather than files on a card, and nothing
+/// downstream of this cares where the PNG came from.
+pub(crate) fn decode_bytes(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+    decode_reader(std::io::Cursor::new(bytes))
+}
+
+fn decode_reader<R: std::io::Read>(reader: R) -> Option<(Vec<u8>, u32, u32)> {
+    let mut dec = png::Decoder::new(reader);
     dec.set_transformations(png::Transformations::normalize_to_color8());
     // A card holds user supplied art; a hostile or broken header must not become an OOM.
     dec.set_limits(png::Limits { bytes: 64 << 20 });

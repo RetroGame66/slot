@@ -78,34 +78,51 @@ fn every_line_is_already_upper_case() {
     }
 }
 
-/// `Canvas::blit` composites the wordmark's own SVG raster onto the label. `render_svg` hands
-/// back straight alpha, so the blend scales the source by its own alpha rather than trusting it
-/// to already carry that scale; a blend shaped for premultiplied pixels would instead clip
-/// every partly covered edge pixel toward the full ink colour, collapsing the wordmark's top
-/// edge from a ramp to a single hard step. This scans the columns where that top edge sits (in
-/// the sticker's own coordinate space) and asks for at least one column whose edge pixel is
-/// neither the ground nor the ink outright: proof the edge is still antialiased.
+/// `Canvas::blit` composites the wordmark over the plate, and `print` sets the type the same way.
+/// Both are handed straight alpha — the decoder and the font's coverage both hand back "this much
+/// of the ink", not "this much light" — so the blend scales the source by its own alpha rather
+/// than trusting it to already carry that scale. A blend shaped for premultiplied pixels would
+/// instead clip every partly covered edge pixel toward the full ink colour, collapsing the
+/// wordmark's top edge from a ramp to a single hard step.
+///
+/// **The plate and the lockup are the player's artwork now**, so this finds the edge rather than
+/// naming it. The version before named a background colour and a row range to scan, and both of
+/// those moved the moment the art did. What tells the two blends apart is what sits between the
+/// ink and what is under it: straight alpha leaves the plate showing through a partly covered
+/// pixel, premultiplied leaves the plate's own colour and then jumps to the ink outright.
 #[test]
-fn the_wordmarks_top_edge_is_antialiased_not_a_hard_step() {
+fn an_edge_is_composited_with_straight_alpha_not_clipped() {
     use slot_ui::sticker_face;
-    const GROUND: [u8; 3] = [0x23, 0x1f, 0x20];
     const INK: [u8; 3] = [0xff, 0xff, 0xff];
     let face = sticker_face(&fields());
     let get = |x: u32, y: u32| -> [u8; 3] {
         let i = ((y * face.w + x) * 4) as usize;
         [face.rgba[i], face.rgba[i + 1], face.rgba[i + 2]]
     };
-    let edges: Vec<[u8; 3]> = (400..413)
-        .filter_map(|x| {
-            (129..142).find_map(|y| {
-                let above = get(x, y - 1);
-                let here = get(x, y);
-                (above == GROUND && here != GROUND).then_some(here)
-            })
+    let between = |lo: [u8; 3], hi: [u8; 3], v: [u8; 3]| {
+        (0..3).all(|c| {
+            let (a, b) = (lo[c] as i32, hi[c] as i32);
+            let v = v[c] as i32;
+            v > a.min(b) && v < a.max(b)
         })
-        .collect();
+    };
+    let mut partial = 0;
+    for y in 2..face.h {
+        for x in 0..face.w {
+            // The first inked pixel of a run, and what is above it. Above is a partly covered
+            // pixel if it sits between what is under it and the ink; if it is exactly what is
+            // under it, the edge is the step the broken blend would leave.
+            if get(x, y) != INK || get(x, y - 1) == INK {
+                continue;
+            }
+            if between(get(x, y - 2), INK, get(x, y - 1)) {
+                partial += 1;
+            }
+        }
+    }
     assert!(
-        edges.iter().any(|&e| e != GROUND && e != INK),
-        "every sampled column's top edge jumps straight from the ground to the ink: {edges:?}"
+        partial > 0,
+        "no partly covered pixel anywhere on the label: every edge jumps from the plate to the \
+         ink, so the blend is clipping them instead of showing the plate through"
     );
 }
