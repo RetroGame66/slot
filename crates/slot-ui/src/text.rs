@@ -143,7 +143,15 @@ pub fn coverage(dst_w: u32, dst_h: u32, layout: &Layout) -> Vec<u8> {
     let Some(vm) = font.horizontal_line_metrics(layout.px) else {
         return out;
     };
-    let line_h = vm.new_line_size;
+    // Centre on the true em box — ascent minus descent — not on `new_line_size`, which also
+    // carries the font's hhea line gap. The gap is blank space *between* lines and is not part
+    // of the ink a line draws; some faces pad it by a full extra em (Plix ships `line_gap == upm`).
+    // Feeding it into the line box pushes the baseline down until the line no longer fits the band
+    // it is rasterised into, so the type is clipped at the top and reads as if shifted upward.
+    // Subtracting the gap leaves `ascent - descent`, identical to `new_line_size` when the gap is
+    // zero (label.ttf, the embedded fallback), so the long-standing layout for that face is
+    // unchanged and any card face a player drops in — whatever its metrics — stays centred.
+    let line_h = vm.new_line_size - vm.line_gap;
     let block_h = line_h * layout.lines.len() as f32;
     let mut baseline = (dst_h as f32 - block_h) / 2.0 + vm.ascent;
 

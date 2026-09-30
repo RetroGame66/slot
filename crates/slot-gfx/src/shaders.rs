@@ -79,21 +79,45 @@ uniform vec3 u_cc_bias;
 uniform sampler2D u_pal;
 // 1.0 = 走色板，0.0 = 走上面的矩阵。uniform 分支，两条路各自编译好，代价可忽略。
 uniform float u_pal_on;
+// 像素艺术模式（彩色机的第 4 档）：把画面量化到一张经典像素画色板（DB16，16 色）。
+// 32^3 的查找表平铺成 1024×32 的纹理：x = r + 32*g，y = b（每通道取 5 bit，正好覆盖
+// 一个 GBA 能出的全部 RGB555 颜色）。查询前按屏幕像素位置加一个 4×4 有序抖动偏移，
+// 把量化产生的色带变成点阵——像素画就是这么干的。
+uniform sampler2D u_pix;
+uniform float u_pix_on;
 // 格子：颜色（sRGB 0..1，取色板最浅那一档）与混入量（0 = 不画）。
 // 画在每个源像素 3x3 的**右列与下行**——重叠的右下角只算一次，5 个像素——所以一个游戏像素
 // 保留左上 2x2 的画面。用 `fract(v_uv * u_src)` 取子位置，几个 ALU 加一次 mix 就够，
 // 比再取一张遮罩纹理便宜，而且格子色**自动跟着色板走**。
 uniform vec3 u_grid;
 uniform float u_grid_mix;
+// 1.0 = 只画**下行**（扫描线），0.0 = 画整个 5/9 格子。扫描线是同一格子的横线那一半，
+// 所以不用第二条渲染路径 —— 一个 uniform 分支就够。
+uniform float u_grid_scan;
 // 色彩校正所在的 gamma：1.0 = 直接在编码空间乘（旧行为，两步 pow 互为逆）；
 // 2.2 = 先转线性、乘完再转回。饱和度与单色背光映射必须在线性空间里做才不发闷——
 // 这是 RetroArch 手持着色器（nds-color / lcd1x_nds）的通行做法，直接乘编码值会把
 // 「半彩」压暗、把单色背光冲淡。
 uniform float u_cc_gamma;
 varying vec2 v_uv;
+// 4×4 有序抖动（Bayer）。两次 2×2 用算术叠出来，避开 GLSL ES 1.00 没有的位运算与数组索引。
+float Bayer2(vec2 a) {
+    vec2 f = floor(a);
+    return fract(f.x * 0.5 + f.y * f.y * 0.75);
+}
+float Bayer4(vec2 a) {
+    return Bayer2(a * 0.5) * 0.25 + Bayer2(a);
+}
 void main() {
     vec3 c = texture2D(u_game, v_uv).rgb;
-    if (u_pal_on > 0.5) {
+    if (u_pix_on > 0.5) {
+        // 抖动 ±半个 5-bit 步，再吸附到 32 级（floor+0.5 即四舍五入），最后查表。
+        float bayer = Bayer4(floor(gl_FragCoord.xy)) - 0.5;
+        vec3 q = clamp(c + bayer / 31.0, 0.0, 1.0);
+        vec3 lv = floor(q * 31.0 + 0.5);
+        vec2 uv = vec2((lv.x + 32.0 * lv.y + 0.5) / 1024.0, (lv.z + 0.5) / 32.0);
+        c = texture2D(u_pix, uv).rgb;
+    } else if (u_pal_on > 0.5) {
         // 画面是四阶灰，色板按灰阶取色。表在 CPU 上就按四档插好了（含中间过渡，反射那边
         // 拿到的是模糊过的连续值），这里一次 NEAREST 取样 —— 比两次 pow + 九次乘加便宜，
         // 而且四档落点精确，多色相的色板也保得住。
@@ -106,7 +130,11 @@ void main() {
     }
     if (u_grid_mix > 0.0) {
         vec2 sub = fract(v_uv * u_src);
-        if (sub.x >= 0.66667 || sub.y >= 0.66667) {
+        // The mesh is the right column and the bottom row of every 3x3 source pixel (5 of its 9,
+        // overlap counted once); a scanline is the bottom row alone — the same lit wire every
+        // third game pixel, which is what a panel's row gap looks like.
+        bool hit = sub.y >= 0.66667 || (u_grid_scan < 0.5 && sub.x >= 0.66667);
+        if (hit) {
             c = mix(c, u_grid, u_grid_mix);
         }
     }
@@ -191,9 +219,11 @@ void main() {
     // and goes on reading as one however `m` is changed.
     vec3 c = texture2D(u_blur, vec2(m.x, 1.0 - m.y)).rgb;
     // The same colour correction the game pass applies — so the reflection carries the filter
-    // (DMG green, ice-blue, amber, pink, grayscale, half colour) instead of mirroring the raw
-    // picture, which is what switching a filter would otherwise leave disagreeing with the
-    // screen. Keep this block in step with GAME_FRAG's own.
+    // (GRAYSCALE, AGB-001, NDS) instead of mirroring the raw picture, which is what switching a
+    // filter would otherwise leave disagreeing with the screen. Keep this block in step with
+    // GAME_FRAG's own. The pixel-art grade is the one exception: quantising a *blurred* glow
+    // would only band it, so GAME_FRAG's `u_pix` branch has no counterpart here and the light
+    // round the screen stays continuous (the app hands this pass the identity matrix for it).
     if (u_pal_on > 0.5) {
         c = texture2D(u_pal, vec2(dot(c, vec3(0.299, 0.587, 0.114)), 0.5)).rgb;
     } else {

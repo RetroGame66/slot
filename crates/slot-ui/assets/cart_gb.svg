@@ -1,11 +1,28 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 232 260">
-  <!-- Game Boy / Game Boy Color cartridge outline, class A and class B.
-       Same 4 px/mm scale as cart.svg (240 px = 60 mm), so stroke weight and antialiasing
-       come out the same: this shell is 58 x 65 mm, which is 232 x 260 px.
-       Portrait, unlike the Advance cart: 58 mm across and 65 mm tall.
-       The notch in the top edge is the one class A and class B cartridges carry and
-       class C (Game Boy Color only) ones do not -- the locking tab of the original
-       handheld slides into it. The Game Boy Advance slot switch reads the same notch,
-       which is how the console knows to boot in its legacy mode. -->
-  <path d="M12 0 L122 0 L122 9 L146 9 L146 0 L220 0 L232 12 L232 260 L0 260 L0 12 Z" fill="#fff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 276">
+  <!-- Game Boy cartridge outline, class A and class B (grey and black cartridges).
+
+       Scale is the shelf's own: 240 px across = 57 mm, so this shell is 240 x 276 px for the
+       published 57 x 65.5 x 7.5 mm. Portrait, unlike the Advance cart in cart.svg: the same
+       57 mm across, but 65.5 mm tall against the Advance cart's 35 mm.
+
+       The notch is a step cut out of the TOP RIGHT corner, not a slot in the middle of the top
+       edge. Three sources agree on the corner and on which one it is: Nintendojo ("a small
+       notch taken out of the upper righthand corner"), The Odyssey ("a small notch taken out of
+       the upper right-hand corner to allow for the power switch to be moved into the on
+       position") and the Game Pak article ("lacked the notch in the top-right corner, and thus
+       physically prevented the power switch of a monochrome Game Boy from being turned on").
+       The original handheld's power switch slides a tab into that step and locks the cart in.
+       Class C (Game Boy Color only) shells have no step at all, which is the whole lockout:
+       see cart_gbc.svg.
+
+       NOTCH_W and NOTCH_D below are estimated from the shell's proportions, not measured: the
+       published dimensions cover the outside of the shell, not the step. 26 px is 6.2 mm and
+       17 px is 4.0 mm, which is the size the tab needs. Replace them if a cartridge is ever
+       measured with calipers.
+
+       Corners: the top left is rounded, the bottom two are rounded a little more. The front
+       also carries an indented oval for the "Nintendo GAME BOY" moulding, which is a face
+       detail rather than part of the outline, so it does not appear here. -->
+  <path d="M6 0 L214 0 L214 17 L240 17 L240 268
+           A8 8 0 0 1 232 276 L8 276 A8 8 0 0 1 0 268 L0 6 A6 6 0 0 1 6 0 Z" fill="#fff"/>
 </svg>

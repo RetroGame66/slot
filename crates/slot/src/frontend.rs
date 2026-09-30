@@ -6,16 +6,16 @@ use std::time::{Duration, Instant};
 use slot_gfx::{Compositor, Draw, TexId, OUT_H, OUT_W};
 use slot_input::{InputSource, Millis};
 use slot_power::{Platform, Power};
-use slot_store::format_stamp;
+use slot_store::{format_stamp, System};
 use slot_ui::lang;
 use slot_ui::{
     arrows_hint_face, cart_face, cart_placeholder, cart_shadow, cheat_row_face, chip_face,
     dialog_line_face, size_for,
     chip_shadow_face, clean_label, clock_face, hhmm, hint_face, icon_face, letters, menu_face,
-    photo_face, set_clock_hint_face, shelf_title_face, shortcut_hint_face, shortcut_row_face,
-    socket_face, sticker_face, title_face, toast_face, wallpaper_face, word_face, Icon,
-    PowerChoice, StickerFields, Toast, ALERT_PX, BOLT_PX, HUD_ICON_PX, LEGEND, PALETTE_NAME_PX,
-    SHORTCUT_ROWS,
+    palette_cell_w, palette_name_face, palette_name_h, photo_face, set_clock_hint_face,
+    shelf_title_face, shortcut_hint_face, shortcut_row_face, socket_face, sticker_face,
+    title_face, toast_face, wallpaper_face, word_face, Icon, PowerChoice, StickerFields, Toast,
+    ALERT_PX, BOLT_PX, HUD_ICON_PX, LEGEND, PALETTE_FOOT_PX, SHORTCUT_ROWS,
 };
 
 use crate::app::{App, GameRow, LinkRow, Phase};
@@ -88,10 +88,16 @@ pub struct Frontend {
     switcher: Switcher,
     clocks: Clocks,
     about: AboutFace,
-    /// The palette browser's one line of type and the string it was built from. One name at a
-    /// time is what makes a table of hundreds affordable to browse: fifteen of them would be
-    /// fifteen rasterisations per page turn.
+    /// The palette browser's names. A page is read one of two ways and the fields are that pair:
+    /// a colour machine's nine grades get a face each, so the page can be read across; a Game Boy's
+    /// 343 palettes keep the one line at the foot of the panel, because their names are longer
+    /// than a cell (see `App::palette_names`). Never both — the two are keyed differently and each
+    /// clears itself on the machine that does not use it.
+    palette_texes: Vec<Option<TexId>>,
     palette_tex: Option<TexId>,
+    /// The pages both were last built for: the cell faces and the foot line change on a page turn
+    /// and at no other time, so a caret moving inside a page mints nothing.
+    palette_paged: Option<(System, usize)>,
     palette_named: Option<String>,
     /// Whether the first frame's uptime has been written to `boot.log`. One line, once, so the
     /// log says how long the device took to reach the shelf and which base it did it on.
@@ -159,7 +165,9 @@ impl Frontend {
             switcher: Switcher::default(),
             clocks: Clocks::default(),
             about: AboutFace::default(),
+            palette_texes: Vec::new(),
             palette_tex: None,
+            palette_paged: None,
             palette_named: None,
             frame_logged: false,
         }
@@ -871,8 +879,8 @@ impl Frontend {
         compositor.set_blue_light(self.session.app().blue_light());
         compositor.set_shake(self.session.app().screen_shake());
         compositor.set_screen_power(self.session.app().screen_power());
-        // The card's display filter, every frame so a SELECT+X (mask) or SELECT+Y (colour)
-        // press lands on the next one.
+        // The card's display filter, every frame so a SELECT+X (that machine's own screen look)
+        // or SELECT+Y (colour) press lands on the next one.
         compositor.set_panel_mask(&self.session.app().display_mask());
         compositor.set_color_correction(
             &self.session.app().display_cc(),
@@ -883,12 +891,16 @@ impl Frontend {
         // 原生灰, which leaves the matrix path — and its two `pow`s — switched off.
         let palette = self.session.app().display_palette();
         compositor.set_palette(palette.as_ref());
-        // ...and the lattice over it, which on a Game Boy is the palette's own lightest shade:
-        // the dots and the picture are made of the same four colours, so there is no separate
-        // aperture table to keep in step with the palette.
+        // The pixel-art lookup, the other texture-driven grade: `None` unless the pixel mode is
+        // the one in force on a colour machine, so it costs nothing the rest of the time.
+        compositor.set_pixel_lut(self.session.app().display_pixel_lut());
+        // ...and the lattice over it, on the two machines that draw one: a Game Boy's is the
+        // palette's own lightest shade and a Game Boy Color's is white or black and rides the
+        // overlay ring. An Advance has no overlay, so it is on the aperture table instead
+        // (`display_mask`) and pushes nothing here.
         match self.session.app().display_grid() {
-            Some((colour, mix)) => compositor.set_grid(&colour, mix),
-            None => compositor.set_grid(&[0.0, 0.0, 0.0], 0.0),
+            Some((colour, mix, scanline)) => compositor.set_grid(&colour, mix, scanline),
+            None => compositor.set_grid(&[0.0, 0.0, 0.0], 0.0, false),
         }
         compositor.set_cc_gamma(self.session.app().display_cc_gamma());
         // Every frame, like the rest: the machine whose frame these filters are about is the
@@ -927,6 +939,12 @@ impl Frontend {
             &mut self.switcher,
         );
         sync_cheat_faces(self.session.app_mut(), compositor);
+        sync_palette_names(
+            self.session.app_mut(),
+            compositor,
+            &mut self.palette_texes,
+            &mut self.palette_paged,
+        );
         sync_palette_name(
             self.session.app_mut(),
             compositor,
@@ -1165,10 +1183,57 @@ fn sync_shelf_title(
     }
 }
 
-/// The palette browser's one line of type: the name of the entry under the caret. Mirrors
-/// `sync_shelf_title` — one rasterise per move of the caret, and none at all on a frame where
-/// nothing moved — and it is the only text the browser has, which is what keeps a table of
-/// hundreds of entries cheap to walk.
+/// The palette browser's row of names: one face per cell, so every cell on the panel says what
+/// it is rather than only the one under the caret. A colour machine's page, whose nine grades are
+/// named in four to six characters each.
+///
+/// Mirrors `sync_shelf_title` in what it costs and how: the key is the page, so a turn of the
+/// page is the only thing here that rasterises anything, and a caret walking inside a page —
+/// which is nearly every frame the browser is up — is a comparison and nothing else. The
+/// textures come from a pool and go back into it, and every face is the cell's own width, so
+/// the pool neither grows nor has to be resized after the first page.
+///
+/// Empty on a Game Boy, whose names do not fit a cell: the faces are cleared and
+/// `sync_palette_name` sets the foot line instead.
+fn sync_palette_names(
+    app: &mut App,
+    compositor: &mut Compositor,
+    pool: &mut Vec<Option<TexId>>,
+    shown: &mut Option<(System, usize)>,
+) {
+    let key = app.palette_names_key();
+    if *shown == key {
+        return;
+    }
+    *shown = key;
+    if key.is_none() {
+        app.set_palette_names(Vec::new());
+        return;
+    }
+    let (w, h) = (palette_cell_w(), palette_name_h());
+    let names = app.palette_names();
+    let mut faces = Vec::with_capacity(names.len());
+    for (i, name) in names.iter().enumerate() {
+        // The author's own name, number and all: `PS40 Sunburst` is what the same palette is
+        // called in `gbcpalettes.h`, so a name read off the device can be looked up there
+        // without a translation table in between. Fixed-size boxes, so a long one is set smaller
+        // rather than clipped and the pool below is reused instead of rebuilt.
+        let face = palette_name_face(name, w, h);
+        while pool.len() <= i {
+            pool.push(None);
+        }
+        let id = upload_rgba(compositor, &mut pool[i], w, h, &face.rgba);
+        faces.push((id, w, h));
+    }
+    app.set_palette_names(faces);
+}
+
+/// The palette browser's one line of type: the name of the entry under the caret, for the tables
+/// whose names are longer than a cell. Mirrors `sync_shelf_title` — one rasterise per move of the
+/// caret, and none at all on a frame where nothing moved.
+///
+/// The box is `dialog_line_face`'s, 640 pixels wide and twice the type size tall, so a name that
+/// no cell could hold is set here whole, at the size the rest of the interface uses.
 fn sync_palette_name(
     app: &mut App,
     compositor: &mut Compositor,
@@ -1182,10 +1247,7 @@ fn sync_palette_name(
     *shown = want.clone();
     match want {
         Some(name) => {
-            // The author's own name, number and all: `PS40 Sunburst` is what the same palette is
-            // called in `gbcpalettes.h`, so a name read off the device can be looked up there
-            // without a translation table in between.
-            let face = dialog_line_face(&name, PALETTE_NAME_PX);
+            let face = dialog_line_face(&name, PALETTE_FOOT_PX);
             let (w, h) = (face.w, face.h);
             let id = upload(compositor, slot, face);
             app.set_palette_name_face(Some((id, w, h)));

@@ -10,4 +10,5 @@
 *.ttf  binary
 *.mp4  binary
 *.pcm  binary
+*.bin  binary
 *.so   binary

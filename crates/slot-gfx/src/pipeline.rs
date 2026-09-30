@@ -34,16 +34,24 @@ pub struct GamePass {
     /// A texture rather than a table in the shader because the four shades are arbitrary
     /// colours, and a 256-entry upload is a kilobyte.
     pal: gl::types::GLuint,
+    /// The pixel-art lookup: 1024x32 RGBA — the 32^3 colour cube flattened (x = r + 32*g,
+    /// y = b), each texel the palette colour nearest that cell. Only the pixel grade reads
+    /// it; a texture for the same reason as `pal`.
+    pix: gl::types::GLuint,
     /// Whether the lookup above is what draws the picture, or the matrix is.
     ///
     /// The *sampler's* location is not kept: `u_pal` is bound to texture unit 2 once in `new` and
     /// never again, so the location is asked for there and dropped. It used to be a field, holding
     /// the location of `u_pal_on` by mistake — harmless only because nothing ever read it.
     u_pal_on: gl::types::GLint,
-    /// The lattice drawn over every 3x3 source pixel: its colour and how much of it to mix in.
-    /// `0.0` for the mix is off, which is what every machine but the Game Boy is.
+    /// Whether the pixel-art lookup draws the picture (`u_pix` in GAME_FRAG).
+    u_pix_on: gl::types::GLint,
+    /// The lattice drawn over every 3x3 source pixel: its colour, how much of it to mix in, and
+    /// whether it is the whole 5-of-9 mesh or the bottom row alone (a scanline). A mix of `0.0` is
+    /// off, which is the default; every machine draws its mesh from here now.
     u_grid: gl::types::GLint,
     u_grid_mix: gl::types::GLint,
+    u_grid_scan: gl::types::GLint,
     /// A compositor with nobody driving it is a screen that is on.
     power: f32,
 }
@@ -83,7 +91,19 @@ impl GamePass {
             gl::RGBA,
             Some(&[0u8; 1024]),
         );
-        let (u_rect, u_bright, u_cc, u_cc_bias, u_cc_gamma, u_pal_on, u_grid, u_grid_mix);
+        let pix = crate::gl::texture(1024, 32, gl::NEAREST, gl::CLAMP_TO_EDGE, gl::RGBA, None);
+        let (
+            u_rect,
+            u_bright,
+            u_cc,
+            u_cc_bias,
+            u_cc_gamma,
+            u_pal_on,
+            u_pix_on,
+            u_grid,
+            u_grid_mix,
+            u_grid_scan,
+        );
         unsafe {
             // What is fixed for the life of the program: which texture unit carries what, and
             // the offscreen target every rect is placed against. Not the source size — that
@@ -92,6 +112,7 @@ impl GamePass {
             gl::Uniform1i(crate::gl::uniform_location(prog, "u_game"), 0);
             gl::Uniform1i(crate::gl::uniform_location(prog, "u_mask"), 1);
             gl::Uniform1i(crate::gl::uniform_location(prog, "u_pal"), 2);
+            gl::Uniform1i(crate::gl::uniform_location(prog, "u_pix"), 3);
             gl::Uniform2f(
                 crate::gl::uniform_location(prog, "u_target"),
                 OUT_W as f32,
@@ -110,11 +131,25 @@ impl GamePass {
             // black, and only a hardware palette moves it (see `u_cc_bias` in GAME_FRAG).
             gl::Uniform3f(u_cc_bias, 0.0, 0.0, 0.0);
             u_pal_on = crate::gl::uniform_location(prog, "u_pal_on");
+            u_pix_on = crate::gl::uniform_location(prog, "u_pix_on");
+            gl::Uniform1f(u_pix_on, 0.0);
             u_grid = crate::gl::uniform_location(prog, "u_grid");
             u_grid_mix = crate::gl::uniform_location(prog, "u_grid_mix");
             gl::Uniform1f(u_grid_mix, 0.0);
+            u_grid_scan = crate::gl::uniform_location(prog, "u_grid_scan");
+            gl::Uniform1f(u_grid_scan, 0.0);
             // Off until a palette arrives; the matrix path is what runs by default.
             gl::Uniform1f(u_pal_on, 0.0);
+            // The source size, primed for the machine `active` starts on. `set_system` is a no-op
+            // when the machine has not changed, so a pass that only ever sees an Advance — which
+            // starts as one — would otherwise never upload this at all. Both the aperture mask and
+            // the lattice tile by it, and with it left at zero the lattice's `fract(v_uv * u_src)`
+            // is zero everywhere: no cell ever matches, and the mesh silently never draws.
+            gl::Uniform2f(
+                crate::gl::uniform_location(prog, "u_src"),
+                System::Gba.src_w() as f32,
+                System::Gba.src_h() as f32,
+            );
         }
         let mut pass = GamePass {
             prog,
@@ -128,9 +163,12 @@ impl GamePass {
             u_cc_bias,
             u_cc_gamma,
             pal,
+            pix,
             u_pal_on,
+            u_pix_on,
             u_grid,
             u_grid_mix,
+            u_grid_scan,
             power: 1.0,
         };
         pass.set_system(System::Gba);
@@ -257,17 +295,49 @@ impl GamePass {
         }
     }
 
-    /// Draw the panel lattice — or stop drawing it, with `None`.
+    /// Hand over the pixel-art lookup, or take it away. `None` restores the matrix path.
     ///
-    /// `colour` is the shade the lines are mixed towards and `mix` is how much of it shows; the
-    /// caller passes the palette's lightest shade, so a DMG's grid is olive and a Light's is
-    /// cyan without either being written down here. The geometry lives in the shader: the right
-    /// column and the bottom row of every 3x3 source pixel, which is 5 of its 9.
-    pub fn set_grid(&self, colour: &[f32; 3], mix: f32) {
+    /// `lut` is 1024x32 RGBA (131072 bytes): the 32^3 colour cube flattened, each texel the
+    /// palette colour nearest that cell, built on the CPU from the pixel palette
+    /// (`app::DisplayFilter::pixel_lut`). One NEAREST fetch per pixel; the 5-bit snap and the
+    /// 4x4 dither that go with it live in GAME_FRAG.
+    pub fn set_pixel_lut(&self, lut: Option<&[u8]>) {
+        unsafe {
+            gl::UseProgram(self.prog);
+            match lut {
+                Some(l) => {
+                    gl::BindTexture(gl::TEXTURE_2D, self.pix);
+                    gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+                    gl::TexSubImage2D(
+                        gl::TEXTURE_2D,
+                        0,
+                        0,
+                        0,
+                        1024,
+                        32,
+                        gl::RGBA,
+                        gl::UNSIGNED_BYTE,
+                        l.as_ptr() as *const std::ffi::c_void,
+                    );
+                    gl::Uniform1f(self.u_pix_on, 1.0);
+                }
+                None => gl::Uniform1f(self.u_pix_on, 0.0),
+            }
+        }
+    }
+
+    /// Draw the panel lattice — or stop drawing it, with a mix of zero.
+    ///
+    /// `colour` is the shade the lines are mixed towards and `mix` is how much of it shows.
+    /// `scanline` keeps the bottom row of every 3x3 source pixel and drops the right column: the
+    /// same lit wire every third game pixel rather than a mesh. The geometry lives in the shader
+    /// either way.
+    pub fn set_grid(&self, colour: &[f32; 3], mix: f32, scanline: bool) {
         unsafe {
             gl::UseProgram(self.prog);
             gl::Uniform3f(self.u_grid, colour[0], colour[1], colour[2]);
             gl::Uniform1f(self.u_grid_mix, mix.max(0.0));
+            gl::Uniform1f(self.u_grid_scan, if scanline { 1.0 } else { 0.0 });
         }
     }
 
@@ -332,6 +402,8 @@ impl GamePass {
             gl::BindTexture(gl::TEXTURE_2D, self.mask);
             gl::ActiveTexture(gl::TEXTURE2);
             gl::BindTexture(gl::TEXTURE_2D, self.pal);
+            gl::ActiveTexture(gl::TEXTURE3);
+            gl::BindTexture(gl::TEXTURE_2D, self.pix);
             gl::ActiveTexture(gl::TEXTURE0);
         }
         quad.draw();
@@ -345,6 +417,7 @@ impl Drop for GamePass {
             gl::DeleteTextures(1, &self.game_gb);
             gl::DeleteTextures(1, &self.mask);
             gl::DeleteTextures(1, &self.pal);
+            gl::DeleteTextures(1, &self.pix);
             gl::DeleteProgram(self.prog);
         }
     }

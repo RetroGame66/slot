@@ -83,15 +83,24 @@ says so. The rows are fixed strings rasterised at boot with the rest of the furn
 the one screen whose job is to be read is the worst moment to be asking a font for twenty lines.
 
 **Panel-mask presets.** Upstream multiplies the picture by one fixed LCD3x table, always. Here the
-mask is five presets on `SELECT` + `X` — OFF, LCD3X 50%, LCD3X 100% (the default), SCANLINE 50%,
-SCANLINE 100% — and the card may ship its own 3x3 table in `System/mask.txt` instead of the
-built-in.
+Advance's aperture is **seven presets** on `SELECT` + `X` — OFF, the LCD3x grid at 25 / 50 / 75 /
+100%, then the scanline at 50 and 100% — and the card may ship its own 3x3 table in
+`System/mask.txt` instead of the built-in. The two Game Boys have no aperture table: their screen
+look is the **Overlay** ring (`Overlay/` on the card — three DMG models, then the card's own
+`gb-*.png` / `gbc-*.png`), and a Game Boy Color's grid rides that same ring, three states per
+entry. `SELECT` + `X` is the one key for all three.
 
-**Colour correction.** Upstream has none. Here the game shader gains a 3x3 colour matrix, cycled
-on `SELECT` + `Y` through seven presets: FULLCOLOR (identity, the default), HALFCOLOR (50%
-saturation), NOCOLOR (luma only, black and white), and four tinted-backlight palettes — DMG green,
-ice-blue, amber, pink — which keep the picture's luma and recolour it in the hue of a coloured
-LCD. The card may override the NOCOLOR matrix in `System/cc.txt`.
+**Colour correction.** Upstream has none. Here the two colour machines cycle a table of
+**eighteen grades** on `SELECT` + `Y`, nine to a page: the panel looks it actually had (none,
+AGB-001, libretro GBA, VBA, GBC transpose, NDS) and what the picture can be made to look like
+(DB16, DB32, Commodore 64, greyscale, four duotones, and four photographic LUTs — TealOrange,
+HorrorBlue, Classic Chrome, BleachBypass). Four mechanisms sit behind them — a 3x3 matrix in
+linear space, a Rec.601 ramp, a nearest-colour palette map by CIELAB distance, and a baked
+32-cube — and **not one line of the shader changed**: each grade is routed onto a channel that was
+already there. A **hold** of the same key opens the palette browser, where a colour machine's nine
+cells are named under themselves and a Game Boy's 343 palettes (gambatte's own table) are paged
+fifteen at a time. A Game Boy's three model palettes refuse to be recoloured, because each is half
+of the art it was drawn with. The card may override the greyscale matrix in `System/cc.txt`.
 
 The grading is done in **linear** space (gamma 2.2) for HALFCOLOR and the four tints; FULLCOLOR
 and NOCOLOR are pushed at gamma 1.0 and multiply exactly as the shader did before. That matters
@@ -197,8 +206,8 @@ A `+` means both together. `†` marks a chord this fork adds; everything else i
 |-----------------------------|---------------------------------------|
 | `SELECT` + `Up` / `Down`    | Adjust brightness                     |
 | `SELECT` + `Left` / `Right` | Adjust blue light                     |
-| `SELECT` + `X` †            | Cycle the panel mask preset           |
-| `SELECT` + `Y` †            | Cycle the colour correction           |
+| Tap `POWER`                 | Sleep, or wake again — the state is made durable on the way down |
+| Hold `POWER`                | The power menu: restart, or power off |
 | `VOL+` / `VOL-`             | Change the volume                     |
 | `VOL+` + `VOL-`             | Mute, remembering the level           |
 
@@ -210,6 +219,10 @@ A `+` means both together. `†` marks a chord this fork adds; everything else i
 | `L` / `R` †     | Step the letter index, one slot at a time |
 | Tap `A`         | Resume the last save state          |
 | Hold `A`        | Start the game fresh                |
+| Tap `X` †       | Star this cart, or unstar it        |
+| Hold `X` †      | Favourites, or the whole library    |
+| Tap `Y` †       | Switch this machine's subfolder     |
+| Hold `Y` †      | Cycle the machine's shelf           |
 | `MENU`          | About screen, and the shortcut card under it |
 | `START`         | Choose which emulator runs the cart |
 | `SELECT` + `START` † | Print the interface light, or dark again |
@@ -222,8 +235,9 @@ A `+` means both together. `†` marks a chord this fork adds; everything else i
 | `Up` / `Down`   | Page the shortcut list              |
 | `B` or `MENU`   | Close, back to the carousel         |
 
-The card is two sections — the carousel and in game — and it carries the `SELECT` chords as well,
-which is the part that was being forgotten.
+The card is **six sections**: the keys that answer anywhere (first), the carousel, the eight rows
+all three machines share in a game, and then one section per machine — Advance, Game Boy, Game Boy
+Color — because `SELECT` + `X` and `SELECT` + `Y` mean three different things.
 
 ### In game
 
@@ -239,6 +253,16 @@ which is the part that was being forgotten.
 | Hold `R2`                 | Fast-forward                                                                                     |
 | Double tap `R2`           | Lock fast-forward on. Press again to unlock                                                      |
 
+### The screen's own look, per machine
+
+| Machine         | Input                       | Action                                                                    |
+|-----------------|-----------------------------|---------------------------------------------------------------------------|
+| Advance         | `SELECT` + `X` †            | Step the aperture preset (seven: off, LCD3x 25/50/75/100%, scanline 50/100%) |
+| Game Boy        | `SELECT` + `X` †            | Step the Overlay ring (three models, then the card's `Overlay/gb-*.png`)   |
+| Game Boy Color  | `SELECT` + `X` †            | The same ring, each entry carrying three states — without the mesh, white, black |
+| Advance / Color | `SELECT` + `Y` †            | Walk this page of the eighteen colour grades; **hold** to open the browser |
+| Game Boy        | `SELECT` + `Y` †            | Walk this page of the 343 palettes (fifteen a page); **hold** for the browser |
+
 ### On the save state switcher (double tap `MENU`)
 
 | Input                    | Action                                          |
@@ -251,17 +275,27 @@ which is the part that was being forgotten.
 
 ### The five chords this fork adds, in full
 
-**`SELECT` + `X` — panel mask.** Five stops, in a ring: `OFF` → `LCD3X 50%` → `LCD3X 100%` →
-`SCANLINE 50%` → `SCANLINE 100%`. The default is `LCD3X 100%`, which is upstream's look. The
-50% steps are the same table lerped halfway toward a clean framebuffer.
+**`SELECT` + `X` — the screen's own look.** What it steps depends on the machine, which is the
+one place in this fork where a single chord is deliberately three different rings: seven aperture
+presets on an Advance (`OFF` → `LCD3X 25%` → `50%` → `75%` → `100%` → `SCANLINE 50%` →
+`SCANLINE 100%`), and the **Overlay** ring on the two Game Boys — three DMG models, then the
+card's own `Overlay/<machine>-*.png`, with a Game Boy Color's grid riding each entry as three
+states. Art where there is art, grid where there is none.
 
-**`SELECT` + `Y` — colour correction.** Seven stops, in a ring: `FULLCOLOR` (identity, the
-default) → `HALFCOLOR` (50% saturation) → `NOCOLOR` (luma only) → `DMG green` → `ice-blue` →
-`amber` → `pink`. The last four are the tinted-backlight palettes.
+**`SELECT` + `Y` — the palette.** A tap walks the page of the entry in hand; a hold (0.55 s) opens
+the palette browser. On a colour machine the table is eighteen grades in two pages of nine —
+`sRGB`, `AGB-001`, `libretro GBA`, `VBA`, `GBC transpose`, `NDS`, `DB16`, `DB32`, `Commodore 64`,
+greyscale, four duotones, `TealOrange`, `HorrorBlue`, `Classic Chrome`, `BleachBypass` — and on a
+Game Boy it is the 343-palette table, fifteen to a page.
 
-Both of those work on the carousel **and** in game, and both write the pair to
+Both chords work **in game only**, and both write the whole set of display modes to
 `System/display.txt` the moment either changes — so the look you picked is the look on the next
 boot. They are declined while the core picker is up, so a chord cannot stack on top of it.
+
+**`SELECT` + `R2` is gone.** It was the second key to the Overlay ring, which made it an exact
+duplicate of `SELECT` + `X` on the one machine that answered it and dead on the other two, so it
+was removed from the chord table; `R2` is free again (a bare `R2` is still fast-forward).
+`B` and `L2` are free for the same reason.
 
 **`SELECT` + `A` — cheat table.** In game. The first press opens the table over the paused game:
 `Up` / `Down` move, `A` toggles the code in hand, `B` leaves. A second `SELECT` + `A` while it is
@@ -332,15 +366,17 @@ Cheats/<stem>.txt  one cheat code per line; `#` starts a comment and blank lines
                    reaches the core.
 ```
 
-`display.txt` holds two integers, so the two display modes survive a reboot:
+`display.txt` holds four integers, so every machine's look survives a reboot:
 
 ```
-2 0        # mask_mode cc_mode: LCD3X 100%, FULLCOLOR
+2 2 163 1      # mask cc_gba cc_gb cc_gbc
 ```
 
-`mask_mode` runs 0 to 4 (`OFF`, `LCD3X 50%`, `LCD3X 100%`, `SCANLINE 50%`, `SCANLINE 100%`) and
-`cc_mode` runs 0 to 6 (`FULLCOLOR`, `HALFCOLOR`, `NOCOLOR`, `DMG green`, `ice-blue`, `amber`,
-`pink`). An unparsable file — or no file — means the shipped look.
+`mask` runs 0 to 6 — `OFF`, the LCD3x grid at 25 / 50 / 75 / 100%, then the scanline at 50 and
+100%. The three colour slots are one per machine: `cc_gba` and `cc_gbc` index the eighteen grades,
+and `cc_gb` indexes the 343-palette table. A file with fewer numbers still reads — the older two-
+and one-integer spellings meant "this colour, every machine", and that is still what they mean. An
+unparsable file, or no file, means the shipped look.
 
 Label art is drawn at 196x86, or about 2.28:1. Anything else is scaled to cover that box and centre
 cropped, so a square or portrait image loses its top and bottom. Bigger art is fine and comes down

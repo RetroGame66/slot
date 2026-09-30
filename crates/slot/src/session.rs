@@ -575,23 +575,25 @@ impl Session {
         self.app.set_cheats(crate::root::cheats(&self.root, stem));
         self.push_cheats();
         // The screen-overlay set for the cart's system (`Overlay/gb*.png` / `gbc*.png`), with
-        // the persisted rotation index applied: slot 0 is GB, 1 is GBC. GBA has no set, and a
-        // card with no art clears the overlay — either way the built-in look stands. The
-        // frontend mints the GL texture when it next sees `overlay_dirty`.
+        // the persisted rotation index applied: slot 0 is GB, 1 is GBC. GBA has no overlay set
+        // at all, so it clears whatever the previous cart left on screen — a Game Boy's model
+        // art (or a GBC's frame) must not bleed through into a GBA game, and there is no key on
+        // this machine that would turn it off. The frontend mints the GL texture when it next
+        // sees `overlay_dirty`.
         let (which, slot) = match system {
             System::Gb => ("gb", 0),
             System::Gbc => ("gbc", 1),
             System::Gba => ("", 0),
         };
-        let list = if which.is_empty() {
-            Vec::new()
+        if which.is_empty() {
+            // No overlay set for this system: drop the previous cart's overlay.
+            eprintln!("slot: overlay: GBA has no set — clearing");
+            self.app.clear_overlay_set();
         } else {
-            crate::root::overlay_files(&self.root, which)
-        };
-        // Say what the card actually offered. Art the scanner did not take — a name it does not
-        // recognise — is otherwise invisible: the device has no console, and the overlay leaves
-        // no other trace anywhere on screen or off.
-        if !which.is_empty() {
+            let list = crate::root::overlay_files(&self.root, which);
+            // Say what the card actually offered. Art the scanner did not take — a name it does
+            // not recognise — is otherwise invisible: the device has no console, and the overlay
+            // leaves no other trace anywhere on screen or off.
             let names: Vec<String> = list
                 .iter()
                 .map(|o| {
@@ -611,8 +613,8 @@ impl Session {
                     names.join(", ")
                 }
             );
+            self.app.set_overlay_set(list, slot);
         }
-        self.app.set_overlay_set(list, slot);
     }
 
     /// (Re)send the current cheat list to the core, each code's enabled ANDed with the master

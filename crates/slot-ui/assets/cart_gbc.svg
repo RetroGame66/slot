@@ -1,8 +1,28 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 232 260">
-  <!-- Game Boy Color only cartridge (class C): the same 58 x 65 mm shell as cart_gb.svg with
-       the top notch removed. Nintendo cut that notch out of class C shells so they could not
-       latch into the original Game Boy, and the shape is the whole of the lockout -- which
-       also makes it the cleanest thing to carry into a shelf: a class C cart is visibly a
-       different object from a class A or B one, and the header says which it is. -->
-  <path d="M12 0 L220 0 L232 12 L232 260 L0 260 L0 12 Z" fill="#fff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 276">
+  <!-- Game Boy Color only cartridge (class C, the translucent ones), 240 x 276 px at the
+       shelf's own scale for the published 57 x 65.5 x 9 mm.
+
+       Two things separate this shell from the class A and B in cart_gb.svg:
+
+       1. No step in the top right corner. Nintendo left it out of class C so the cart could not
+          latch into the original Game Boy, and the shape is the whole lockout: the handheld's
+          power switch needs somewhere to slide, and a cart without the step leaves it unable to
+          move to "on". WIPIVERSE puts it plainly ("a missing notch in the top-right corner
+          prevents the power switch from being turned on") and every other source agrees on
+          which corner.
+
+       2. A raised bulge along the top edge instead of the class A and B shells' indented oval.
+          Nintendojo: "the casing became a clear, smoky colour, with a protruding oval-shaped
+          bubble poking out of the top, replacing the indented oval from the old, grey
+          cartridges". RetroFam's comparison table gives it as a column: class A and B read
+          "indented", class C exclusive reads "bulging". This one is in the outline, because the
+          bubble stands proud of the shell rather than being moulded into its face.
+
+       The bulge's height and span are estimated from the shell's proportions: the published
+       numbers stop at the outside of the shell. Body top sits at y=12 (2.9 mm down), the crown
+       reaches y=0, and the bubble runs about x=44 to x=196. The label matches cart_gb.svg at
+       42 x 37 mm, 7.5 mm in from each side and 6 mm down. -->
+  <path d="M10 12 L44 12 Q70 0 120 0 Q170 0 196 12 L230 12
+           A10 10 0 0 1 240 22 L240 268 A8 8 0 0 1 232 276 L8 276 A8 8 0 0 1 0 268 L0 22
+           A10 10 0 0 1 10 12 Z" fill="#fff"/>
 </svg>

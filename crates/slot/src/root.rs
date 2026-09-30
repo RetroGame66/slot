@@ -272,20 +272,45 @@ pub fn color_correction(root: &Path) -> Option<[[f32; 3]; 3]> {
 
 /// The display modes, read from `System/display.txt` as "mask_mode cc_gba cc_gb cc_gbc":
 /// mask_mode 0..=4 (OFF, LCD3X 50%, LCD3X 100%, SCANLINE 50%, SCANLINE 100%) and one colour
-/// choice per machine — 0..=6 for the colour machines (FULLCOLOR, HALFCOLOR, NOCOLOR, DMG green,
-/// ice-blue, amber, pink backlight) and the whole palette table for the Game Boy, whose list is
-/// palettes rather than saturations. The ranges are the app's to clamp, since it is the app that
-/// owns the lists; this only reads non-negative integers.
+/// choice per machine — 0..=2 for the colour machines (GRAYSCALE, AGB-001, NDS) and the whole
+/// palette table for the Game Boy, whose list is palettes rather than saturations. The ranges are
+/// the app's to clamp, since it is the app that owns the lists; this only reads non-negative
+/// integers.
+///
+/// The colour machines' three grades: **0 GRAYSCALE** (plain black & white), **1 AGB-001** (the
+/// authentic original Game Boy Advance panel — desaturated, faintly green, darker gamma), **2 NDS**
+/// (the Nintendo DS Phat screen — a softer, near-sRGB middle ground). A Game Boy is greyscale and
+/// keeps its own palette table instead.
 ///
 /// The Game Boy's slot is deliberately **not** clamped here. Its list is hundreds of entries long
 /// and grew once already, and a cap written into the file reader would silently send a card back
 /// to an early palette the next time it did. Only the app knows how long that table is, so that
 /// is where the clamp lives (`DisplayFilter::new`).
 ///
-/// Missing or unparsable means the shipped look: mask on (LCD3X, 2) and colour correction off.
-/// **Two integers is the older file** — "mask cc" from before the colour choice went per machine
-/// — and that one value is applied to all three, so a card written by the previous build keeps
-/// the look it was set to.
+/// Missing or unparsable means the shipped look: mask on (LCD3X, 2) and the colour machines on
+/// AGB-001 (the authentic restore), the Game Boy on its neutral grey. **Two integers is the older
+/// file** — "mask cc" from before the colour choice went per machine — and that one value is
+/// applied to all three, so a card written by the previous build keeps the look it was set to
+/// (remapped onto the new list by `migrate_display_modes`).
+/// How many aperture presets `display.txt`'s first number may name: OFF, four strengths of the
+/// LCD3x table, the scanline at two.
+///
+/// **It lives here and not beside the ring it describes**, because this is the file that indexes
+/// it: `read` clamps against this number and `DisplayFilter::MASK_STATES` — the count of arms in
+/// `applied_mask`, the length `cycle_mask` walks — is the ring agreeing with the card. One number,
+/// because the file, the ring and the cycle all have to agree about it.
+///
+/// It was a literal `4` in the clamp until 2026-09-30 — the count when the ring held five presets.
+/// It was never raised when the scanline was added, so a card that saved the scanline (5 or 6) was
+/// read back as LCD3x 100% on the next boot: the two newest presets were written, shown, persisted
+/// and then silently replaced. `tests/display.rs` now walks the whole ring through the file.
+pub const MASK_STATES: usize = 7;
+
+/// The display modes a card asks for: the Advance's aperture preset, then one colour slot per
+/// machine — `mask cc_gba cc_gb cc_gbc`.
+///
+/// Both are read as *indices* rather than as names, so every list has to clamp: an out-of-range
+/// `cc` is corrected by `DisplayFilter::new`, and an out-of-range `mask` here.
 pub fn display_modes(root: &Path) -> (u8, [u16; 3]) {
     let text = std::fs::read_to_string(root.join("System/display.txt")).ok();
     let vals: Vec<u16> = text
@@ -295,7 +320,13 @@ pub fn display_modes(root: &Path) -> (u8, [u16; 3]) {
                 .collect()
         })
         .unwrap_or_default();
-    let mask = vals.first().copied().unwrap_or(2).min(4) as u8;
+    // Clamped against the ring's own count, not a literal: this was `4` — the number when the
+    // Advance's ring held five presets, and it never moved when the scanline joined it.
+    let mask = vals
+        .first()
+        .copied()
+        .unwrap_or(2)
+        .min(MASK_STATES as u16 - 1) as u8;
     let one = vals.get(1).copied().unwrap_or(0);
     let cc = if vals.len() >= 4 {
         [one, vals[2], vals[3]]
@@ -347,6 +378,45 @@ pub fn migrate_palette(root: &Path) {
     }
     write_display_modes(root, mask, cc);
     let _ = std::fs::write(&marker, "palette.v2\n");
+}
+
+/// Where the colour machines' grade list stood before the rebuild, and where those same looks
+/// are in the new three-entry list now.
+///
+/// The old list (0..=6) was FULLCOLOR, HALFCOLOR, NOCOLOR, DMG green, ice-blue, amber, pink. The
+/// rebuild keeps just the three that mean something on a colour machine: 0 GRAYSCALE, 1 AGB-001
+/// (the authentic original panel), 2 NDS (the soft near-sRGB middle ground). The single-colour
+/// backlights (DMG green / ice-blue / amber / pink) have no equivalent — a colour grade has no
+/// one signature tint — so they collapse to GRAYSCALE, the nearest the new list has. FULLCOLOR was
+/// the shipped default and the faithful-restore intent, so it lands on AGB-001; HALFCOLOR was
+/// already the softened look, so it lands on NDS.
+const CC_LEGACY: [u16; 7] = [1, 2, 0, 0, 0, 0, 0];
+
+/// Written once `migrate_display_modes` has run, so it runs exactly once per card.
+pub const DISPLAY_MARKER: &str = "System/display.v2";
+
+/// Bring a card written before the colour-grade rebuild onto the new three-entry list, so the
+/// look it was set to is still the look it shows.
+///
+/// Keyed on a marker file (like `migrate_palette`) rather than on the value, because the old and
+/// new lists overlap across 0..=2 and no single number can say which list wrote it. Only the
+/// colour machines are remapped — the Game Boy's slot (1) is its own palette table and is left
+/// untouched by this. Best effort throughout: a card that cannot be written to simply keeps the
+/// default, exactly as it would have anyway.
+pub fn migrate_display_modes(root: &Path) {
+    let marker = root.join(DISPLAY_MARKER);
+    if marker.exists() {
+        return;
+    }
+    let (mask, mut cc) = display_modes(root);
+    for slot in [0usize, 2usize] {
+        // GB slot (1) is a palette index, not a grade; skip it.
+        if let Some(mapped) = CC_LEGACY.get(cc[slot] as usize) {
+            cc[slot] = *mapped;
+        }
+    }
+    write_display_modes(root, mask, cc);
+    let _ = std::fs::write(&marker, "display.v2\n");
 }
 
 /// The audio profile, read from `System/audio.txt`: `stable`, `balanced` or `strict`.

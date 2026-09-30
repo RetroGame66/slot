@@ -61,9 +61,10 @@ pub use icon::{icon_box, icon_face, Icon};
 pub use letters::Letters;
 pub use palette::Mode;
 pub use palette_browser::{
-    draw as draw_palette_browser, pages_of as palette_pages, View as PaletteView,
-    BANDS as PALETTE_BANDS, COLS as PALETTE_COLS, NAME_PX as PALETTE_NAME_PX,
-    PER_PAGE as PALETTE_PER_PAGE, ROWS as PALETTE_ROWS,
+    cell_width as palette_cell_w, draw as draw_palette_browser, name_face as palette_name_face,
+    name_height as palette_name_h, pages_of as palette_pages, rows_of as palette_rows,
+    Swatch as PaletteSwatch, View as PaletteView, COLS as PALETTE_COLS, FOOT_PX as PALETTE_FOOT_PX,
+    PER_PAGE as PALETTE_PER_PAGE, ROWS as PALETTE_ROWS, STOPS as PALETTE_STOPS,
 };
 pub use plate::{
     arrows_hint_face, arrows_hint_width, cap_width, clock_face, clock_width, hint_face, hint_quad,

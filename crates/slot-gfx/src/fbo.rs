@@ -312,11 +312,18 @@ impl Compositor {
         }
     }
 
+    /// Hand the pixel-art lookup to the game pass, or take it back with `None`. Forwarded to the
+    /// game pass only: the glow round the screen is a blur, and quantising a blur would band it,
+    /// so the reflection is deliberately left continuous (see `REFLECT_FRAG`).
+    pub fn set_pixel_lut(&mut self, lut: Option<&[u8]>) {
+        self.game.set_pixel_lut(lut);
+    }
+
     /// Draw the panel lattice, or take it away with a mix of zero. Forwarded to the game pass
     /// only: the lattice belongs to the panel the picture is on, not to the light spilling out
     /// of it, so the reflection carries the palette but not the mesh.
-    pub fn set_grid(&mut self, colour: &[f32; 3], mix: f32) {
-        self.game.set_grid(colour, mix);
+    pub fn set_grid(&mut self, colour: &[f32; 3], mix: f32, scanline: bool) {
+        self.game.set_grid(colour, mix, scanline);
     }
 
     /// 色彩校正的 gamma，随矩阵一起每帧推。1.0 = 编码空间直乘；2.2 = 线性空间做校正。

@@ -115,11 +115,26 @@ impl Row {
     }
 }
 
-/// The card, in reading order.
+/// The card, in reading order: **what answers anywhere, then the shelf, then a game — and a game
+/// in four, one section for the rows all three machines answer and one for each machine.**
 ///
-/// Two screens and nothing else: a shortcut only has to be found on the screen it is pressed
-/// on. The handful that answer everywhere say so in their own line rather than earning a third
-/// section of their own.
+/// The device's own keys come first and as a section of their own. They used to be printed at the
+/// foot of the shelf's rows with "（任何界面）" in each description, which is the one thing a
+/// reader in a game never gets to: they are not the shelf's keys, and a card that files them under
+/// a screen they are not about is a card that hides them behind a scroll. Two sections became
+/// three, and the third is the one that is true of all of them.
+///
+/// **A game is then split by machine**, because the same chord means three different things:
+/// `SELECT+X` is the aperture table on an Advance and the screen art on the two Game Boys,
+/// `SELECT+Y` walks eighteen colour grades on a colour machine and 343 palettes on a Game Boy. One
+/// list had to describe all of that in one row — `屏幕外观 / 色板档位` was true of no machine in
+/// particular — so the rows that differ are the sections, and the eight every machine answers sit
+/// above them rather than three times over.
+///
+/// **Overlay is the name of the art**, on the case and here: `Overlay/` on the card, the Overlay
+/// ring on the two Game Boys. It is neither "screen art" nor "screen look" — `SELECT+X` on an
+/// Advance is a screen *look* and on a Game Boy it is this art, and calling both of them one thing
+/// is how the rows came to read as though they described three features.
 ///
 /// **Two tables, chosen at compile time** — the same shape as `lang`, and for the same reason:
 /// one source, two builds, nothing to keep in step by hand. It is not in `lang` because a row is
@@ -136,10 +151,48 @@ impl Row {
 /// Whoever edits either table should measure again. The two walls are the tight ones, not the
 /// card: a key line may reach `DESC_X - HALO_PX` (319) — the widest is `存档 / 读取最近的存档`
 /// (English: `Save / load latest`) at 317 — and a description may reach `ROW_W` (660) — the widest
-/// is `蓝光滤镜（任何界面都可调）` at 633. The row count is the array's own type, so a row added
-/// without changing `27` does not compile.
+/// is `金手指码表（再按全开全关）` at 633 (English: `Power menu: restart/off`, 653). The row count
+/// is the array's own type, so a row added without changing `39` does not compile.
+///
+/// ⚠️ **Both widths are font-dependent, and the numbers above are Noto Sans CJK's.** The card is
+/// rasterised with whatever face `System/fonts/` supplies, and a card font with wider advances
+/// moves every one of these — the machine's own font (Plix-Bold, since 2026-09-24) puts that
+/// widest key line at **323.4, four pixels past the wall**. Measure with the font the card
+/// actually carries, not with the one that happened to be on the desk when the card was written;
+/// the measuring script takes the font as `SLOT_FONT`.
 #[cfg(not(feature = "lang-en"))]
-pub const ROWS: [Row; 27] = [
+pub const ROWS: [Row; 39] = [
+    // The keys that answer on every screen, and the only section that is about the device rather
+    // than about a screen: the two levels, and the power button. None of them needs a screen to be
+    // under it, so none of them belongs to one.
+    Row::Head("任何界面"),
+    Row::Key(
+        &[
+            Seg::Btn("SELECT"),
+            Seg::Sep("+"),
+            Seg::Btn("上"),
+            Seg::Sep("/"),
+            Seg::Btn("下"),
+        ],
+        "亮度",
+    ),
+    Row::Key(
+        &[
+            Seg::Btn("SELECT"),
+            Seg::Sep("+"),
+            Seg::Btn("左"),
+            Seg::Sep("/"),
+            Seg::Btn("右"),
+        ],
+        "蓝光滤镜",
+    ),
+    // `PowerPress` flushes the state durably on the way down, before the tap is decided, so
+    // putting the machine down is safe from any screen.
+    Row::Key(&[Seg::Sep("轻点"), Seg::Btn("POWER")], "休眠 / 唤醒"),
+    Row::Key(
+        &[Seg::Sep("长按"), Seg::Btn("POWER")],
+        "电源菜单：重启 / 关机",
+    ),
     Row::Head("货架界面"),
     Row::Key(
         &[
@@ -158,17 +211,13 @@ pub const ROWS: [Row; 27] = [
     Row::Key(&[Seg::Sep("长按"), Seg::Btn("A")], "把这个游戏从头开始"),
     Row::Key(&[Seg::Sep("轻点"), Seg::Btn("X")], "收藏 / 取消收藏这张卡"),
     Row::Key(&[Seg::Sep("长按"), Seg::Btn("X")], "收藏夹 / 全部"),
+    // Tap first, hold second — the same order the two rows above use for A and for X. This
+    // pair was the other way round until the player asked for it: the hand reads down one column
+    // of gestures, and a lone hold among them is the one that has to be found rather than read.
+    Row::Key(&[Seg::Sep("轻点"), Seg::Btn("Y")], "切换子文件夹"),
     Row::Key(&[Seg::Sep("长按"), Seg::Btn("Y")], "切换机种货架"),
     Row::Key(&[Seg::Btn("START")], "为这张卡挑一个模拟器"),
     Row::Key(&[Seg::Btn("MENU")], "关于页与快捷键说明"),
-    // SELECT+Y rather than SELECT+X/Y, and the difference is the screen, not the chord: the
-    // panel mask is the game panel's alone, while colour correction also recolours the carts
-    // themselves and so is the one of the pair that answers here. The mask keeps its own row
-    // under "游戏中", where it actually does something.
-    Row::Key(
-        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("Y")],
-        "色彩校正（含卡带）",
-    ),
     // SELECT+START lands here and nowhere else: the case and the index are what the other
     // mode reprints, and both of them are on this screen.
     Row::Key(
@@ -179,35 +228,35 @@ pub const ROWS: [Row; 27] = [
         &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("音量 ±")],
         "音频延迟档位",
     ),
-    Row::Key(
-        &[
-            Seg::Btn("SELECT"),
-            Seg::Sep("+"),
-            Seg::Btn("上"),
-            Seg::Sep("/"),
-            Seg::Btn("下"),
-        ],
-        "亮度（任何界面都可调）",
-    ),
-    Row::Key(
-        &[
-            Seg::Btn("SELECT"),
-            Seg::Sep("+"),
-            Seg::Btn("左"),
-            Seg::Sep("/"),
-            Seg::Btn("右"),
-        ],
-        "蓝光滤镜（任何界面都可调）",
-    ),
-    Row::Head("游戏中"),
+    // ---- what a game answers, one section per machine ---------------------------------------
+    //
+    // **The chords are the same three machines over and their meanings are not.** `SELECT+X` is the
+    // aperture ring on the Advance and the Overlay art on the two Game Boys, and `SELECT+Y` walks
+    // eighteen grades on a colour machine and 343 palettes on a Game Boy. One list had to describe
+    // all of that in one row — "屏幕外观 / 色板档位" was true of no machine in particular, and the
+    // player asked for the split.
+    //
+    // `SELECT+R2` is gone from the card because it is gone from the chord table: it was a second
+    // key to the same Overlay ring on a Game Boy, and nothing at all on the other two machines.
+    //
+    // The eight rows *every* machine answers sit in one section above the three rather than being
+    // copied into each of them: a section is for what differs, and three copies of a row is three
+    // places to edit it. The order is the machines' own — `slot_store::System` is Advance, Game
+    // Boy, Game Boy Color, and this reads the same way.
+    Row::Head("游戏中 · 三机通用"),
     Row::Key(
         &[Seg::Sep("长按"), Seg::Btn("MENU")],
         "存档、弹出卡带、回货架",
     ),
     Row::Key(&[Seg::Sep("双击"), Seg::Btn("MENU")], "即时存档切换器"),
+    // **What this opens is a menu, not a link**, and its one row only exists on a card whose
+    // active core is gpSP — the only core here with a netpacket interface. With mGBA (the default)
+    // the menu comes up with nothing on it, which is what the old description ("与另一台 RG SP
+    // 联机") read as a broken key rather than as a core that cannot do it. The row says which core
+    // instead: the fix is a core away, and a row that hides that is a row that teaches a dead end.
     Row::Key(
         &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("MENU")],
-        "与另一台 RG SP 联机",
+        "联机菜单（仅 gpSP 核心）",
     ),
     Row::Key(
         &[
@@ -219,38 +268,13 @@ pub const ROWS: [Row; 27] = [
         ],
         "存档 / 读取最近的存档",
     ),
+    // Pressed twice over: the first opens the cart's table, and a second press with it already
+    // open flips every code at once. Both halves are on the row, because the second one is a
+    // shortcut the card would otherwise never mention — it was missing until the player asked for
+    // this section to be gone over.
     Row::Key(
         &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("A")],
-        "这张卡的金手指码表",
-    ),
-    Row::Key(
-        &[
-            Seg::Btn("SELECT"),
-            Seg::Sep("+"),
-            Seg::Btn("X"),
-            Seg::Sep("/"),
-            Seg::Btn("Y"),
-        ],
-        "面板遮罩 / 色板轮换",
-    ),
-    // The hold half of the same chord, and the only row that names a panel. On a Game Boy
-    // SELECT+X steps the screen art and SELECT+Y the palette, so the browser hangs off the one
-    // that already means "the colours" — a tap walks the page, a hold opens the browser.
-    Row::Key(
-        &[
-            Seg::Sep("长按"),
-            Seg::Btn("SELECT"),
-            Seg::Sep("+"),
-            Seg::Btn("Y"),
-        ],
-        "色板浏览器（GB）",
-    ),
-    // The `Overlay/` art — a different thing from the panel mask three rows up, and the only
-    // one of the two that is a picture rather than a filter. GB and GBC only: there is no GBA
-    // overlay, so the row would be dead on a GBA cart.
-    Row::Key(
-        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("R2")],
-        "屏幕遮罩（仅 GB/GBC）",
+        "金手指码表（再按全开全关）",
     ),
     Row::Key(
         &[
@@ -274,13 +298,99 @@ pub const ROWS: [Row; 27] = [
         ],
         "音量；两个一起按静音",
     ),
+    Row::Head("游戏中 · GBA"),
+    // The one machine with no screen art, so its own screen look is the aperture table — and the
+    // only machine whose grid is a table rather than a mesh. Seven presets: off, the LCD3x grid at
+    // four strengths, the scanline at two.
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("X")],
+        "孔径档位（7 档）",
+    ),
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("Y")],
+        "色板档位（18 档）",
+    ),
+    // The hold half of the palette key, and the only row that names a panel: a tap walks the page,
+    // a hold opens the browser. Both machines want it — a colour machine's eighteen grades are two
+    // pages that a hold is the only way to lay side by side, and a Game Boy's table cannot be walked
+    // at all without one. It is written out under each machine rather than shared, because it sits
+    // between rows that are not shared and a section is read top to bottom.
+    Row::Key(
+        &[
+            Seg::Sep("长按"),
+            Seg::Btn("SELECT"),
+            Seg::Sep("+"),
+            Seg::Btn("Y"),
+        ],
+        "色板浏览器",
+    ),
+    Row::Head("游戏中 · GB"),
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("X")],
+        "遮罩艺术（美术环）",
+    ),
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("Y")],
+        "色板（343 套）",
+    ),
+    Row::Key(
+        &[
+            Seg::Sep("长按"),
+            Seg::Btn("SELECT"),
+            Seg::Sep("+"),
+            Seg::Btn("Y"),
+        ],
+        "色板浏览器",
+    ),
+    // `SELECT+R2` used to sit here. It is gone from the chord table — see the note above — so the
+    // Game Boy's Overlay ring has one key, the same one the other two machines use for their own
+    // screen look.
+    Row::Head("游戏中 · GBC"),
+    // The Overlay ring, and the grid rides it: every `Overlay/GBC/*.png` carries three states —
+    // without the mesh, with a white one, with a black one — so the two are one ring and not two
+    // keys. This section and the Game Boy's are the same three rows, which is the point of naming
+    // the art one thing: the two Game Boys differ in what the art *is*, not in which key asks.
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("X")],
+        "遮罩艺术（含网格）",
+    ),
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("Y")],
+        "色板档位（18 档）",
+    ),
+    Row::Key(
+        &[
+            Seg::Sep("长按"),
+            Seg::Btn("SELECT"),
+            Seg::Sep("+"),
+            Seg::Btn("Y"),
+        ],
+        "色板浏览器",
+    ),
 ];
 
 /// The same card in English. Its own table rather than a second arm at each row, because a table
 /// is what it is: the order, the key lines and the counts are identical, and only the words move.
 /// Measured against the column budget above, not eyeballed — see the note on the Chinese table.
 #[cfg(feature = "lang-en")]
-pub const ROWS: [Row; 27] = [
+pub const ROWS: [Row; 39] = [
+    // The keys that answer on every screen — see the note on the Chinese table.
+    Row::Head("On any screen"),
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("UP/DN")],
+        "Brightness",
+    ),
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("L/R")],
+        "Blue light",
+    ),
+    Row::Key(&[Seg::Sep("Tap"), Seg::Btn("POWER")], "Sleep / wake"),
+    // No spaces round the slash, unlike every other row: with them this measured 669.3 against
+    // the column's 660, and the words are what gives way, not the wall.
+    Row::Key(
+        &[Seg::Sep("Hold"), Seg::Btn("POWER")],
+        "Power menu: restart/off",
+    ),
     Row::Head("On the shelf"),
     Row::Key(&[Seg::Btn("D-PAD"), Seg::Sep("L/R")], "Browse carts"),
     // `L1`/`R1` rather than the Chinese card's `L / R`: the two names would collide with the
@@ -293,13 +403,11 @@ pub const ROWS: [Row; 27] = [
     Row::Key(&[Seg::Sep("Hold"), Seg::Btn("A")], "Restart the game"),
     Row::Key(&[Seg::Sep("Tap"), Seg::Btn("X")], "Star this cart"),
     Row::Key(&[Seg::Sep("Hold"), Seg::Btn("X")], "Favourites / all"),
+    // Tap first, hold second: the order A and X use two rows up.
+    Row::Key(&[Seg::Sep("Tap"), Seg::Btn("Y")], "Switch subfolder"),
     Row::Key(&[Seg::Sep("Hold"), Seg::Btn("Y")], "Cycle the machine"),
     Row::Key(&[Seg::Btn("START")], "Pick the core"),
     Row::Key(&[Seg::Btn("MENU")], "About & shortcuts"),
-    Row::Key(
-        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("Y")],
-        "Colour (with carts)",
-    ),
     Row::Key(
         &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("START")],
         "Day / night theme",
@@ -308,15 +416,9 @@ pub const ROWS: [Row; 27] = [
         &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("VOL ±")],
         "Audio latency",
     ),
-    Row::Key(
-        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("UP/DN")],
-        "Brightness (any)",
-    ),
-    Row::Key(
-        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("L/R")],
-        "Blue light (any)",
-    ),
-    Row::Head("In a game"),
+    // What a game answers — the same split as the Chinese table, one section per machine, with the
+    // rows all three share above them. See its note for why.
+    Row::Head("In a game · all three"),
     Row::Key(&[Seg::Sep("Hold"), Seg::Btn("MENU")], "Save, eject, back"),
     Row::Key(
         &[Seg::Sep("Double-tap"), Seg::Btn("MENU")],
@@ -324,7 +426,7 @@ pub const ROWS: [Row; 27] = [
     ),
     Row::Key(
         &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("MENU")],
-        "Link two RG SPs",
+        "Link menu (gpSP only)",
     ),
     Row::Key(
         &[
@@ -338,30 +440,7 @@ pub const ROWS: [Row; 27] = [
     ),
     Row::Key(
         &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("A")],
-        "Cheat list",
-    ),
-    Row::Key(
-        &[
-            Seg::Btn("SELECT"),
-            Seg::Sep("+"),
-            Seg::Btn("X"),
-            Seg::Sep("/"),
-            Seg::Btn("Y"),
-        ],
-        "Mask / palette",
-    ),
-    Row::Key(
-        &[
-            Seg::Sep("Hold"),
-            Seg::Btn("SELECT"),
-            Seg::Sep("+"),
-            Seg::Btn("Y"),
-        ],
-        "Palette browser (GB)",
-    ),
-    Row::Key(
-        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("R2")],
-        "Screen art (GB/GBC)",
+        "Cheat list (again: all)",
     ),
     Row::Key(
         &[
@@ -384,6 +463,64 @@ pub const ROWS: [Row; 27] = [
             Seg::Btn("-"),
         ],
         "Volume; both mute",
+    ),
+    Row::Head("In a game · Advance"),
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("X")],
+        "Aperture preset (7)",
+    ),
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("Y")],
+        "Colour grade (18)",
+    ),
+    Row::Key(
+        &[
+            Seg::Sep("Hold"),
+            Seg::Btn("SELECT"),
+            Seg::Sep("+"),
+            Seg::Btn("Y"),
+        ],
+        "Palette browser",
+    ),
+    Row::Head("In a game · Game Boy"),
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("X")],
+        "Overlay (the ring)",
+    ),
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("Y")],
+        "Palette (343 of them)",
+    ),
+    Row::Key(
+        &[
+            Seg::Sep("Hold"),
+            Seg::Btn("SELECT"),
+            Seg::Sep("+"),
+            Seg::Btn("Y"),
+        ],
+        "Palette browser",
+    ),
+    // `SELECT+R2` used to sit here, as a second key to the same ring. It is gone from the chord
+    // table, so the Game Boy's Overlay ring has one key — the same one the other two machines use.
+    Row::Head("In a game · Game Boy Color"),
+    // The Overlay ring, with the grid riding it: every `Overlay/GBC/*.png` carries three states, so
+    // the two are one ring and not two keys.
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("X")],
+        "Overlay (and grid)",
+    ),
+    Row::Key(
+        &[Seg::Btn("SELECT"), Seg::Sep("+"), Seg::Btn("Y")],
+        "Colour grade (18)",
+    ),
+    Row::Key(
+        &[
+            Seg::Sep("Hold"),
+            Seg::Btn("SELECT"),
+            Seg::Sep("+"),
+            Seg::Btn("Y"),
+        ],
+        "Palette browser",
     ),
 ];
 
@@ -642,7 +779,9 @@ mod tests {
     fn a_head_is_taller_than_a_key() {
         // The only thing that distinguishes them. A head is not set in a different voice, so if
         // it were also the same height, the card would have no sections.
-        assert!(Row::Head("游戏中").height() > Row::Key(&[Seg::Btn("A")], "选择").height());
+        assert!(
+            Row::Head("游戏中 · 三机通用").height() > Row::Key(&[Seg::Btn("A")], "选择").height()
+        );
     }
 
     #[test]
@@ -736,11 +875,36 @@ mod tests {
     }
 
     #[test]
-    fn the_card_starts_on_a_head_and_holds_two_sections() {
-        // Every key has to belong to a screen it is pressed on. A card that opened with a key
-        // would be a list of twenty-two keys with nothing saying where any of them work.
+    fn the_card_is_a_section_per_screen_and_per_machine() {
+        // Every key has to belong to a screen it is pressed on — and the keys that belong to no
+        // screen in particular get a screen of their own rather than a parenthetical at the foot of
+        // somebody else's section, which is where they used to be filed and where a reader in a
+        // game would never have scrolled to.
         assert!(matches!(ROWS[0], Row::Head(_)));
         let heads = ROWS.iter().filter(|r| matches!(r, Row::Head(_))).count();
-        assert_eq!(heads, 2, "the shelf and the game, and nothing else");
+        assert_eq!(
+            heads, 6,
+            "any screen, the shelf, three machines, and what they share"
+        );
+        // The device's own keys are in that first section and before any screen's rows — they sat
+        // at the foot of the shelf's until the player asked for them to be lifted out of it.
+        let screen_at = ROWS
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find(|(_, r)| matches!(r, Row::Head(_)))
+            .map(|(i, _)| i)
+            .expect("a section after the first");
+        let power: Vec<usize> = ROWS
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| matches!(r, Row::Key(segs, _) if segs.contains(&Seg::Btn("POWER"))))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(power.len(), 2, "a tap and a hold of POWER");
+        assert!(
+            power.iter().all(|i| *i < screen_at),
+            "POWER is filed under a screen it does not belong to"
+        );
     }
 }

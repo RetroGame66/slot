@@ -78,9 +78,12 @@ pub enum Action {
     PowerOff,
     LidClose,
     LidOpen,
-    /// Cycle the in-game panel mask (OFF / LCD3X 50% / LCD3X 100% / SCANLINE 50% / SCANLINE 100%) on SELECT+X.
+    /// SELECT+X, and what it steps depends on the machine: the **Overlay** art on a Game Boy and
+    /// a Game Boy Color, and the aperture table on an Advance, the one machine that ships no art.
+    /// `App`'s Phase::Playing is the fork — this only names the chord that reaches it. It is the
+    /// **only** key that does it: `SELECT+R2` used to be a second one and is gone.
     MaskCycle,
-    /// Cycle the in-game colour correction (FULLCOLOR / HALFCOLOR / NOCOLOR / DMG green / ice-blue / amber / pink) on SELECT+Y,
+    /// Cycle the in-game colour correction (GRAYSCALE / AGB-001 / NDS) on SELECT+Y,
     /// and the Game Boy's palette from the same key — a tap walks the page of palettes in hand.
     ColorCycle,
     /// The **hold** half of that same key, on the same press: SELECT+Y held opens the palette
@@ -98,10 +101,6 @@ pub enum Action {
     AudioProfileNext,
     /// The same the other way, on SELECT+VOL-.
     AudioProfilePrev,
-    /// Step to the next Game Boy screen overlay — the `Overlay/gb-NN.png` (or `gbc-NN.png`)
-    /// set for the cart's system. Emitted on every screen like the other chords; the app lands
-    /// it where there is an overlay to rotate (the cart in the slot, or the shelf's highlight).
-    OverlayNext,
     /// Which way round the frontend is printed, on SELECT+START.
     ///
     /// START rather than B, L2 or R2, the other three the chord table leaves free. START is
@@ -556,14 +555,16 @@ fn chord(b: Btn) -> Option<(u16, Action)> {
         Btn::A => (256, Action::CheatToggle),
         Btn::VolUp => (512, Action::AudioProfileNext),
         Btn::VolDown => (1024, Action::AudioProfilePrev),
-        // The three the table left over. B is the one a hand reaches for by accident, and START
-        // is the one the shelf stopped using when the letter-view toggle went; L2 and R2 are
-        // the shoulders.
+        // The one the table left over that is worth taking: START is the one the shelf stopped
+        // using when the letter-view toggle went, and it is the only free button left that already
+        // carries the meaning "how the shelf is shown".
         Btn::Start => (2048, Action::ModeToggle),
-        // SELECT+R2 rotates the screen overlay, in game only (the app lands it there). The
-        // shelf cycle used to sit on SELECT+B and SELECT+L2 as a placeholder; it is a hold of Y
-        // on the shelf now, so those two chords are gone and B/L2 are free.
-        Btn::R2 => (16384, Action::OverlayNext),
+        // **B, L2 and R2 are free.** They were placeholders and are not any more: the shelf cycle
+        // sat on SELECT+B and SELECT+L2 while it was being designed (it is a hold of Y now), and
+        // SELECT+R2 was the second key to the overlay ring until `SELECT+X` became the one key
+        // that means "the screen's own look" on every machine — on a Game Boy the two did exactly
+        // the same thing, and a duplicate that only appears on one of the three is worse than no
+        // key at all. A bare B, L2 or R2 is still the game's, chord key or not.
         _ => return None,
     })
 }

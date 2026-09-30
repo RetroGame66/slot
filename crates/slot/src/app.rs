@@ -375,30 +375,179 @@ fn draw_hint_bar(top: f32, out: &mut Vec<Draw>) {
     }
 }
 
+/// Where 灰度 sits in `GRADES` — the one grade that keeps reading the card's own `cc.txt`, so it
+/// needs naming rather than being found by counting.
+pub const GRADE_GRAY: u16 = 9;
+
+/// One entry of the colour-machine grade list — a name for the browser and boot log, and what
+/// the grade actually is.
+pub struct Grade {
+    pub name: &'static str,
+    pub kind: GradeKind,
+}
+
+/// How a grade makes its look. Four mechanisms, because that is what the good ones need.
+pub enum GradeKind {
+    /// Straight through.
+    Off,
+    /// A 3×3 and the gamma it runs under, both in linear space. The matrix already carries its
+    /// profile's luminance: `lum` is a scalar applied to the linear colour *before* the matrix,
+    /// so folding it into the entries is exact arithmetic rather than an approximation.
+    Matrix([[f32; 3]; 3], f32),
+    /// Two stops of a 1D ramp — dark then light — walked by the picture's own luma.
+    Ramp([u8; 3], [u8; 3]),
+    /// A baked 32³ lookup, laid out exactly like `u_pix`: 1024×32 RGBA, `idx = (b*1024 + g*32 + r)*4`.
+    Lut(&'static [u8]),
+}
+
+/// The colour grades a GBA or GBC cycles, **page one then page two, nine to a page**. The order
+/// is the one the player asked for, so the two pages are two moods: the first is "what the panel
+/// was", the second is "what the picture can be made to look like".
+pub const GRADES: [Grade; 18] = [
+    // ---- page 1: 实机系 ----
+    Grade { name: "无矫正", kind: GradeKind::Off },
+    Grade { name: "AGB-001", kind: GradeKind::Matrix(DisplayFilter::AGB_001_CC, 2.2) },
+    Grade { name: "libretro GBA", kind: GradeKind::Matrix(
+        [[0.82355, 0.17745, -0.09100],
+         [0.09100, 0.59150, 0.22750],
+         [0.14333, 0.12968, 0.63700]], 2.2) },
+    // VBA/No$GBA full colour: target 2.45 with a display gamma of 1.45, which one gamma cannot
+    // hold exactly; 1.69 is the best single value and the look is a nostalgic one anyway.
+    Grade { name: "VBA 全彩", kind: GradeKind::Matrix(
+        [[0.73000, 0.27000, 0.00000],
+         [0.08250, 0.67750, 0.24000],
+         [0.08250, 0.24000, 0.67750]], 1.69) },
+    Grade { name: "GBC 转置", kind: GradeKind::Matrix(
+        [[0.88000, 0.05000, -0.03000],
+         [0.07250, 0.60000, 0.35000],
+         [0.02500, 0.05000, 1.20000]], 1.7) },
+    Grade { name: "NDS", kind: GradeKind::Matrix(DisplayFilter::NDS_CC, 2.0) },
+    Grade { name: "DB16", kind: GradeKind::Lut(include_bytes!("../assets/db16.bin")) },
+    Grade { name: "DB32", kind: GradeKind::Lut(include_bytes!("../assets/db32.bin")) },
+    Grade { name: "Commodore 64", kind: GradeKind::Lut(include_bytes!("../assets/c64.bin")) },
+    // ---- page 2: 风格系 ----
+    Grade { name: "灰度", kind: GradeKind::Matrix(DisplayFilter::DEFAULT_CC, 1.0) },
+    Grade { name: "双色 深蓝米白", kind: GradeKind::Ramp([16, 24, 64], [246, 238, 214]) },
+    Grade { name: "双色 紫青", kind: GradeKind::Ramp([48, 24, 80], [150, 245, 235]) },
+    Grade { name: "双色 墨绿淡黄", kind: GradeKind::Ramp([18, 44, 32], [238, 232, 168]) },
+    Grade { name: "双色 棕奶白", kind: GradeKind::Ramp([58, 34, 22], [250, 226, 190]) },
+    Grade { name: "TealOrange", kind: GradeKind::Lut(include_bytes!("../assets/tealorange.bin")) },
+    Grade { name: "HorrorBlue", kind: GradeKind::Lut(include_bytes!("../assets/horrorblue.bin")) },
+    Grade { name: "Classic Chrome", kind: GradeKind::Lut(include_bytes!("../assets/classicchrome.bin")) },
+    Grade { name: "BleachBypass", kind: GradeKind::Lut(include_bytes!("../assets/bleachbypass2.bin")) },
+];
+
+/// What a colour grade does to **one colour** — the same arithmetic the game pass does, run on a
+/// single pixel so the browser can show what a grade is before it is picked.
+///
+/// A Game Boy's entries carry their own four shades, so a cell shows the palette itself; a grade
+/// has no such list, so it is run instead. **It used to be run on the grey axis** — `[0, 85, 170,
+/// 255]` and every step between — which answers "what does this grade do to white and black", and
+/// most grades leave those alone: every entry came out looking alike and grey, and the player said
+/// exactly that. A hue is what a picture is made of, so a hue is what is fed in (`SWEEP`), and
+/// three of the four mechanisms below can only be told apart on one:
+///
+/// * a matrix moves colours, so a sweep shows it as a wash or a cast;
+/// * a palette grade collapses hues onto its own colours, so the sweep becomes a stack of them;
+/// * a baked cube is a *tone* map as well, so the tone strip under the sweep is where its split
+///   shows — `TealOrange` leaves a saturated dark red red and puts its teal in the neutral
+///   shadows, so a second row of hues would have shown nothing of it.
+pub fn grade_rgb(g: &Grade, rgb: [u8; 3]) -> [u8; 3] {
+    let mut out = [0u8; 3];
+    match g.kind {
+        GradeKind::Off => out = rgb,
+        // In linear space, and as the real 3x3 rather than a row sum: with a grey input every
+        // column is the same number and the sum was correct, but a hue has three different ones.
+        GradeKind::Matrix(m, gamma) => {
+            let lin = rgb.map(|c| (c as f32 / 255.0).powf(gamma));
+            for row in 0..3 {
+                let x = m[row][0] * lin[0] + m[row][1] * lin[1] + m[row][2] * lin[2];
+                out[row] = (x.clamp(0.0, 1.0).powf(1.0 / gamma) * 255.0).round() as u8;
+            }
+        }
+        // Walked by the picture's own luma, Rec.601 weights, exactly as the shader samples
+        // `ramp_lut`'s 256 entries.
+        GradeKind::Ramp(dark, light) => {
+            let l = 0.299 * rgb[0] as f32 + 0.587 * rgb[1] as f32 + 0.114 * rgb[2] as f32;
+            for c in 0..3 {
+                let (a, b) = (dark[c] as f32, light[c] as f32);
+                out[c] = (a + (b - a) * (l / 255.0)).clamp(0.0, 255.0).round() as u8;
+            }
+        }
+        // The cube is 32 per channel, `idx = (b*1024 + g*32 + r)*4`, so a colour is quantised to
+        // the cell of the cube it lands in — which is what the shader's own lookup does.
+        GradeKind::Lut(bytes) => {
+            let q = rgb.map(|c| (c as usize * 31 + 127) / 255);
+            let at = (q[2] * 1024 + q[1] * 32 + q[0]) * 4;
+            out = [bytes[at], bytes[at + 1], bytes[at + 2]];
+        }
+    }
+    out
+}
+
+/// A colour grade's browser cell: **the grade, run over a picture's colours** — `SWEEP`'s eight
+/// hues with `TONE`'s black-to-white strip under them, every stop through `grade_rgb`.
+///
+/// The cell is the grade rather than a drawing of it, which is what makes the browser worth
+/// opening: a grade that washes colour out washes the cell out, a palette grade snaps it onto that
+/// palette's own colours, and a split-tone pulls the two ends of the tone strip apart — teal at
+/// one end and orange at the other, which is why it is called that.
+pub fn grade_swatch(g: &Grade) -> slot_ui::PaletteSwatch {
+    slot_ui::PaletteSwatch::chart(|rgb| grade_rgb(g, rgb))
+}
+
+/// The 1D ramp a duotone walks: 256 RGBA entries, dark at the picture's black and light at its
+/// white, interpolated in the encoded space the shader samples with (see `GAME_FRAG`).
+fn ramp_lut(dark: [u8; 3], light: [u8; 3]) -> [u8; 1024] {
+    let mut lut = [0u8; 1024];
+    for i in 0..256usize {
+        for c in 0..3 {
+            let (a, b) = (dark[c] as u32, light[c] as u32);
+            lut[i * 4 + c] = ((a * (255 - i as u32) + b * i as u32 + 127) / 255) as u8;
+        }
+        lut[i * 4 + 3] = 255;
+    }
+    lut
+}
+
 /// The on-screen picture's two independent knobs.
 ///
-/// `mask_mode` picks the panel mask: 0 = OFF (no aperture), 1 = LCD3X at 50% (the shipped LCD3x
-/// grid softened to half strength), 2 = LCD3X at 100% (the full look), 3 = SCANLINE at 50%
-/// (horizontal scanline overlay softened to half strength), 4 = SCANLINE at 100% (the full
-/// scanline look). `cc_mode` picks the colour correction: 0 = FULLCOLOR (identity, 100%
-/// saturation), 1 = HALFCOLOR (picture at 50% saturation — colours dulled halfway to grey),
-/// 2 = NOCOLOR (grayscale / 0% saturation — black & white), and 3..=6 are four tinted-backlight
-/// grayscale palettes (luma kept, hue replaced by a coloured LCD backlight): 3 = DMG green
-/// (Game Boy dot-matrix green), 4 = ice-blue backlight, 5 = amber-orange backlight, 6 = pink
-/// backlight. Each is cycled on its own chord — SELECT+X for the mask, SELECT+Y for the colour —
-/// and the pair is persisted to `System/display.txt` as two integers "mask_mode cc_mode".
+/// Two ways to the same end — a screen the picture is seen *through* — and the machine picks:
 ///
-/// 半彩与四档单色背光在**线性空间**里做（`CC_GAMMA`）：直接在编码空间乘会把半彩压暗、
-/// 把单色背光冲淡；转线性、乘完再转回，观感才对（RetroArch 手持着色器同法）。
-/// FULLCOLOR 与 NOCOLOR 仍走 gamma 1.0，行为与旧版一致。
+/// **A mesh**, drawn in the game shader (`display_grid`), on the two machines with a screen
+/// bezel: a Game Boy's is its palette's lightest shade and always on, a Game Boy Color's is
+/// white or black and rides the overlay ring.
+///
+/// **An aperture table** (`lcd3x`, `applied_mask`), on the Advance: a 3x3 of per-subpixel
+/// multipliers. It is the one road to a real LCD subpixel structure, which a mesh cannot be —
+/// and it is a *multiply*, so it can only darken, which is why the bezel machines draw a mesh
+/// instead (a white grid needs a mix). `SELECT+X` steps its `MASK_STATES` presets — off, the
+/// LCD3x table at four strengths, and the scanline at two — and the position is the first
+/// number of `display.txt`.
+///
+/// `cc` picks the colour correction, and *that* list is shared: the two colour machines (GBA and
+/// GBC) walk one table of **`GRADES`**, and a Game Boy walks its own palette table instead (see
+/// `gb_lut`), because a greyscale machine's "colour" is a palette rather than a grade. The shared
+/// list is screen grades rather than saturations — first what the panel was, then what the
+/// picture can be made to look like. Each is cycled on its own chord — SELECT+X for that
+/// machine's own screen look (the overlay ring where there is art, the grid ring where there is
+/// none), SELECT+Y for the colour — and the lot is persisted to `System/display.txt` as
+/// "grid cc_gba cc_gb cc_gbc", the first being the Advance's ring.
+///
+/// AGB-001 与 NDS 在**线性空间**里做（`CC_GAMMA`）：直接在编码空间乘会把画面压暗、冲淡；
+/// 转线性、乘完再转回，观感才对（RetroArch 手持着色器同法）。灰度档走 gamma 1.0，行为与旧版一致。
 struct DisplayFilter {
-    /// The card's LCD3x table if it ships one, else the built-in. Only used when `mask_mode` is 1 or 2.
+    /// The card's LCD3x table if it ships one, else the built-in. **Kept but unbound** with the
+    /// aperture it feeds — see the struct doc.
+    #[allow(dead_code)]
     lcd3x: [[[u8; 3]; 3]; 3],
     /// The card's colour matrix (from `cc.txt`) if it ships one, else the NOCOLOR (0% saturation)
     /// default. Only used when `cc_mode` is 2. The matrix the game pass multiplies the picture by,
     /// in the spirit of a colour-saturation shader but applied as a single 3x3 multiply so it
     /// costs nothing here.
     nocolor_cc: [[f32; 3]; 3],
+    /// The Advance's aperture choice, 0..=4. Read by nothing else — see the struct doc.
+    /// The Advance's aperture preset, `0..MASK_STATES` — what SELECT+X steps.
     mask_mode: u8,
     /// One colour-correction choice per machine, in `MACHINE_SLOTS` order (GBA, GB, GBC).
     ///
@@ -421,10 +570,9 @@ struct DisplayFilter {
 const MACHINE_SLOTS: usize = 3;
 impl DisplayFilter {
     const IDENTITY: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-    // NOCOLOR grayscale (0% saturation): plain luma. The whole picture collapses to its luma
+    // GRAYSCALE (0% saturation): plain luma. The whole picture collapses to its luma
     // (Rec.601 weights 0.299/0.587/0.114), so colours keep their brightness but lose hue
-    // entirely — the "black & white / 灰度" look. This is the mode-2 (NOCOLOR) matrix.
-    // Overridable per card through
+    // entirely — the "black & white / 灰度" look. This is mode 0. Overridable per card through
     // System/cc.txt; this is the fallback. Uploaded row-major -> column-major by
     // `Fbo::set_color_correction`, so this multiplies as written.
     const DEFAULT_CC: [[f32; 3]; 3] = [
@@ -432,50 +580,32 @@ impl DisplayFilter {
         [0.299, 0.587, 0.114],
         [0.299, 0.587, 0.114],
     ];
-    /// HALFCOLOR (50% saturation): the original picture at half saturation. Each row is a
-    /// luminance blend at s = 0.5 (out_i = 0.5*luma + 0.5*in_i), so the colours come through
-    /// but dulled halfway toward grey — mode 1 (HALFCOLOR). Hardcoded; tune here (or in cc.txt
-    /// for the NOCOLOR row) if you want more or less saturation.
-    const HALF_CC: [[f32; 3]; 3] = [
-        [0.650, 0.294, 0.057],
-        [0.149, 0.794, 0.057],
-        [0.149, 0.294, 0.557],
+    /// AGB-001 (mode 1): the authentic original Game Boy Advance screen. The AGB-001 / AGS-001
+    /// panel had a small, non-sRGB gamut, so games — mastered oversaturated to fight the dim
+    /// reflective screen — look washed out, faintly green, and dark on it. This is a desaturation
+    /// to s = 0.6 (luma blend, Rec.601 weights) with a mild green cast (blue pulled down, green
+    /// nudged up), run in linear space under `CC_GAMMA` (2.2) so the midtones darken as the real
+    /// panel did. Values are a first pass from the colour science (see the Handheld Color Space
+    /// Project); every entry here is the whole look, so tune to taste.
+    const AGB_001_CC: [[f32; 3]; 3] = [
+        [0.7052, 0.2301, 0.0447],
+        [0.1220, 0.8515, 0.0465],
+        [0.1100, 0.2160, 0.5939],
     ];
-    /// Four tinted-backlight grayscale palettes. Each keeps the picture's luma (Rec.601
-    /// 0.299/0.587/0.114) but recolours it in the hue of a coloured LCD backlight, by making
-    /// every output channel a scaled copy of the luma: `out_c = (tint_c/255) * luma`. The tint
-    /// colours are lifted from the light palettes of the pixel reader we built before
-    /// (`PXReader/reader.c` light group): GB (DMG green) / LCDB (ice-blue) / SEPIA (amber) /
-    /// PINKBG (pink). Modes 3..=6.
+    /// NDS (mode 2): the Nintendo DS Phat screen — a softer, near-sRGB middle ground between the
+    /// washed-out GBA and modern displays. Desaturation to s = 0.88 (mild), no tint, run under a
+    /// slightly lower gamma (2.0) than AGB-001 so it reads brighter, matching the DS Phat's
+    /// backlit panel. Pokefan531's `nds-color` shader is the reference.
+    const NDS_CC: [[f32; 3]; 3] = [
+        [0.91588, 0.07044, 0.01368],
+        [0.03588, 0.95044, 0.01368],
+        [0.03588, 0.07044, 0.89368],
+    ];
+
     /// 线性空间里做色彩校正所用的 gamma（对应 `GAME_FRAG` 的 `u_cc_gamma`）。
-    /// 2.2 = sRGB。只有「半彩」和四档单色背光用它；FULLCOLOR(0)/NOCOLOR(2) 传 1.0，
-    /// 仍是编码空间直乘，与旧版逐位一致（NOCOLOR 的 cc.txt 卡内覆盖语义也不变）。
+    /// 2.2 = sRGB。AGB-001/NDS 两档在线性空间里做（游戏 ROM 是编码空间、直接乘会被压暗/冲淡）；
+    /// 灰度(0) 传 1.0，仍是编码空间直乘，与旧版逐位一致。
     pub const CC_GAMMA: f32 = 2.2;
-    /// 四档单色背光：把画面亮度重新映射成一块**彩色背光**。
-    /// 因为是在线性空间里做（见 `CC_GAMMA`），行系数 = 「目标峰值色的线性值 × 亮度权重
-    /// (0.299/0.587/0.114)」——这样画面最亮处正好落在目标色上，中间调被 gamma 拉出层次，
-    /// 于是观感浓郁；先前在编码空间直乘，中间调被冲成灰调，四档都发淡。
-    /// 峰值色：DMG 绿 rgb(155,188,15) / 冰蓝 rgb(120,170,215) / 琥珀 rgb(240,165,60) / 粉 rgb(240,130,185)。
-    const DMG_GREEN_CC: [[f32; 3]; 3] = [
-        [0.1000, 0.1963, 0.0381],
-        [0.1529, 0.3002, 0.0583],
-        [0.0006, 0.0012, 0.0002],
-    ];
-    const ICE_BLUE_CC: [[f32; 3]; 3] = [
-        [0.0569, 0.1118, 0.0217],
-        [0.1225, 0.2406, 0.0467],
-        [0.2054, 0.4033, 0.0783],
-    ];
-    const AMBER_CC: [[f32; 3]; 3] = [
-        [0.2617, 0.5137, 0.0998],
-        [0.1147, 0.2253, 0.0438],
-        [0.0124, 0.0243, 0.0047],
-    ];
-    const PINK_CC: [[f32; 3]; 3] = [
-        [0.2617, 0.5137, 0.0998],
-        [0.0679, 0.1333, 0.0259],
-        [0.1476, 0.2898, 0.0563],
-    ];
     /// Which shelf a machine's colour choice lives on.
     const fn machine_slot(s: System) -> usize {
         match s {
@@ -485,8 +615,11 @@ impl DisplayFilter {
         }
     }
 
-    /// How many colour-correction entries the colour machines have — the seven above.
-    pub const CC_COUNT: u16 = 7;
+    /// How many colour-correction entries the colour machines (GBA, GBC) have: grayscale, AGB-001,
+    /// NDS, pixel-art — four. The Game Boy has its own count (the whole palette table).
+    pub const CC_COUNT: u16 = GRADES.len() as u16;
+    /// The pixel-art grade's index in that list — the one that quantises to `PIXEL_PALETTE`.
+    pub const PIXEL: u16 = 3;
     /// How many the Game Boy has: the whole palette table, which is every PixelShift and TWB64
     /// entry the core ships plus the two house looks in front of them. See `crate::palettes`.
     pub const GB_CC_COUNT: u16 = crate::palettes::GB_PALETTES.len() as u16;
@@ -524,6 +657,19 @@ impl DisplayFilter {
     /// at 35% and set back to 50% on the device; it is a taste dial and nothing else depends
     /// on the value.
     pub const GB_GRID_MIX: f32 = 0.5;
+    /// How strongly the Game Boy Color's lattice shows, in either colour. Three tenths: a half read
+    /// as a veil over the picture rather than as the glass in front of it, and a quarter was a
+    /// shade too faint.
+    pub const GBC_GRID_MIX: f32 = 0.30;
+    /// How many states each Game Boy Color overlay carries on the ring: **without the grid, with a
+    /// white one, and with a black one**. The count is what ties `overlay_choices`,
+    /// `ordinary_overlay_at` and `display_grid` together, so it lives in one place.
+    pub const GBC_GRID_STATES: usize = 3;
+    /// How many apertures the Advance's ring holds: OFF, four strengths of the LCD3x table, and the
+    /// scanline at two. **The number itself lives in `root`,** because `display.txt`'s first field
+    /// indexes it and that is the file that has to clamp against it; this is the ring agreeing with
+    /// the card rather than the other way round.
+    pub const MASK_STATES: usize = crate::root::MASK_STATES;
 
     /// The palette's own name is not a second array beside the table: each entry of
     /// `crate::palettes::GB_PALETTES` is `(name, four shades)`, so a name cannot drift from the
@@ -586,13 +732,14 @@ impl DisplayFilter {
     fn new(
         lcd3x: [[[u8; 3]; 3]; 3],
         nocolor_cc: [[f32; 3]; 3],
-        mask_mode: u8,
+        mode: u8,
         cc: [u16; 3],
     ) -> Self {
         Self {
             lcd3x,
             nocolor_cc,
-            mask_mode: mask_mode.min(4),
+            // One stored index, one ring: the aperture preset whose position `SELECT+X` steps.
+            mask_mode: mode.min(Self::MASK_STATES as u8 - 1),
             cc: [
                 cc[0].min(Self::CC_COUNT - 1),
                 cc[1].min(Self::GB_CC_COUNT - 1),
@@ -600,8 +747,9 @@ impl DisplayFilter {
             ],
         }
     }
-    /// Mask rides on top of the picture: 0 is clear, 1 the LCD3x grid at 50%, 2 at full strength,
-    /// 3 the scanline overlay at 50%, 4 at full strength.
+    /// The aperture table for the machine in hand. The two machines with a screen bezel answer
+    /// `flat` — they draw their mesh in the shader instead — and the Advance reads the table its
+    /// preset picks.
     fn applied_mask(&self, flat: bool) -> [[[u8; 3]; 3]; 3] {
         // A Game Boy's lattice is not a table any more: it is drawn from the palette in the game
         // shader (see `GB_GRID_MIX`), which is what makes it follow the four shades. The aperture
@@ -611,19 +759,20 @@ impl DisplayFilter {
         }
         match self.mask_mode {
             0 => Self::FLAT_MASK,
-            1 => lerp_mask(&Self::FLAT_MASK, &self.lcd3x, 0.5),
-            2 => self.lcd3x,
-            3 => lerp_mask(&Self::FLAT_MASK, &Self::SCANLINE_MASK, 0.5),
+            1 => lerp_mask(&Self::FLAT_MASK, &self.lcd3x, 0.25),
+            2 => lerp_mask(&Self::FLAT_MASK, &self.lcd3x, 0.50),
+            3 => lerp_mask(&Self::FLAT_MASK, &self.lcd3x, 0.75),
+            4 => self.lcd3x,
+            5 => lerp_mask(&Self::FLAT_MASK, &Self::SCANLINE_MASK, 0.50),
             _ => Self::SCANLINE_MASK,
         }
     }
     /// Colour correction rides under the mask, and what it *is* depends on the machine.
     ///
     /// A Game Boy gets a palette: see `gb_cc`, whose black point is the reason this returns a
-    /// bias at all. The colour machines keep the list they had — 0 identity, 1 the HALFCOLOR
-    /// grade, 2 the NOCOLOR luma, 3 DMG green backlight, 4 ice-blue, 5 amber, 6 pink — all of
-    /// them anchored on black, so their bias is the zero vector and their picture is bit for bit
-    /// what it was before this pair existed.
+    /// bias at all. The colour machines keep a short list of screen grades — 0 the grayscale luma,
+    /// 1 the AGB-001 look, 2 the NDS look — all anchored on black, so their bias is the zero
+    /// vector and their picture is bit for bit what it was before this pair existed.
     fn applied_cc(&self, machine: System) -> ([[f32; 3]; 3], [f32; 3]) {
         let mode = self.cc[Self::machine_slot(machine)];
         if machine == System::Gb {
@@ -631,55 +780,89 @@ impl DisplayFilter {
             // matrix path stays identity so nothing double-applies when the lookup is on.
             return (Self::IDENTITY, [0.0, 0.0, 0.0]);
         }
-        let m = match mode {
-            0 => Self::IDENTITY,
-            1 => Self::HALF_CC,
-            2 => self.nocolor_cc,
-            3 => Self::DMG_GREEN_CC,
-            4 => Self::ICE_BLUE_CC,
-            5 => Self::AMBER_CC,
-            6 => Self::PINK_CC,
-            _ => Self::PINK_CC,
+        let grade = &GRADES[(mode as usize).min(GRADES.len() - 1)];
+        let m = match grade.kind {
+            // 灰度 keeps the card's own `cc.txt` matrix when it ships one, so that one grade stays
+            // overridable per card; every other entry reads its own numbers.
+            GradeKind::Matrix(_, _) if mode == GRADE_GRAY => self.nocolor_cc,
+            GradeKind::Matrix(m, _) => m,
+            _ => Self::IDENTITY,
         };
         (m, [0.0, 0.0, 0.0])
     }
-    /// The signature colour of a tinted-backlight mode (3..=6) as sRGB 0..1 — the colour the
-    /// matrix drives the picture's white to, which is also the tone the four modes are named
-    /// after (see the peak colours on `DMG_GREEN_CC` and friends). Used to fill the letterbox
-    /// around a GB screen so the whole panel reads as one tinted surface. `None` for the modes
-    /// with no single colour — FULLCOLOR, HALFCOLOR, NOCOLOR — which keep the black surround.
-    fn cc_border(&self, machine: System) -> Option<[f32; 3]> {
-        // A Game Boy palette leaves the surround black. The tempting move is the palette's own
-        // lightest shade, and for DMG green that is right — it is how the tinted-backlight modes
-        // above behave. For the Pocket it is near-white and for the Light it is a bright cyan,
-        // and a wall of that around a 160x144 picture at night is not what either machine looked
-        // like: what surrounded a Pocket's LCD was its own grey case, in shadow. Black is the
-        // honest answer for all four, and the picture inside is the palette.
-        if machine == System::Gb {
-            return None;
-        }
-        let c = match self.cc[Self::machine_slot(machine)] {
-            3 => [155.0, 188.0, 15.0],
-            4 => [120.0, 170.0, 215.0],
-            5 => [240.0, 165.0, 60.0],
-            6 => [240.0, 130.0, 185.0],
-            _ => return None,
-        };
-        Some([c[0] / 255.0, c[1] / 255.0, c[2] / 255.0])
+    /// None for every machine now: the colour grades (grayscale / AGB-001 / NDS) have no single
+    /// signature colour to fill the letterbox with, and a Game Boy palette leaves it black too.
+    /// The surround stays black, which is what the real panels looked like.
+    fn cc_border(&self, _machine: System) -> Option<[f32; 3]> {
+        None
     }
+    /// Step the aperture preset, wrapping at the end of the ring.
     fn cycle_mask(&mut self) {
-        self.mask_mode = (self.mask_mode + 1) % 5;
+        self.mask_mode = (self.mask_mode + 1) % Self::MASK_STATES as u8;
     }
     /// Step the colour correction of one of the **colour** machines, wrapping at the end of its
-    /// list of seven.
+    /// list of three (grayscale, AGB-001, NDS).
     ///
     /// A Game Boy never comes through here: its palettes are a table hundreds of entries long
     /// walked a page at a time, and which page that is belongs to `App`, not to the table of
-    /// seven this struct also holds. `App::cycle_cc` is the fork.
+    /// three this struct also holds. `App::cycle_cc` is the fork.
     fn cycle_cc(&mut self, machine: System) {
         let slot = Self::machine_slot(machine);
         self.cc[slot] = (self.cc[slot] + 1) % Self::CC_COUNT;
     }
+}
+
+/// DawnBringer's 16-colour palette (DB16) — the classic limited palette of pixel art, and the
+/// one the pixel-art grade snaps the picture onto. Sixteen colours is deliberately brutal: the
+/// point is the posterised, hand-picked look, not a faithful screen.
+const PIXEL_PALETTE: [[u8; 3]; 16] = [
+    [0x14, 0x0c, 0x1c], [0x44, 0x24, 0x34], [0x30, 0x34, 0x6d], [0x4e, 0x4a, 0x4e],
+    [0x85, 0x4c, 0x30], [0x34, 0x65, 0x24], [0xd0, 0x46, 0x48], [0x75, 0x71, 0x61],
+    [0x59, 0x7d, 0xce], [0xd2, 0x7d, 0x2c], [0x85, 0x95, 0xa1], [0x6d, 0xaa, 0x2c],
+    [0xd2, 0xaa, 0x99], [0x6d, 0xc2, 0xca], [0xda, 0xd4, 0x5e], [0xde, 0xee, 0xd6],
+];
+
+/// The pixel-art lookup, built once and kept for the life of the process.
+static PIXEL_LUT: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+
+/// The baked 32^3 lookup the pixel grade reads.
+///
+/// 131072 bytes (1024x32 RGBA): for every RGB555 level a GBA can emit, the nearest
+/// `PIXEL_PALETTE` colour, laid out so the shader can fetch it with one NEAREST tap
+/// (x = r + 32*g, y = b). Matched in encoded space — the space the core's output and the
+/// palette are both described in — so what the eye compares is what the machine compares.
+fn pixel_lut() -> &'static [u8] {
+    PIXEL_LUT.get_or_init(|| {
+        let pal = PIXEL_PALETTE;
+        let palf: Vec<[f32; 3]> = pal
+            .iter()
+            .map(|c| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0])
+            .collect();
+        let mut lut = vec![0u8; 1024 * 32 * 4];
+        for b in 0..32u32 {
+            for g in 0..32u32 {
+                for r in 0..32u32 {
+                    let q = [r as f32 / 31.0, g as f32 / 31.0, b as f32 / 31.0];
+                    let mut best = 0usize;
+                    let mut bd = f32::MAX;
+                    for (i, c) in palf.iter().enumerate() {
+                        let d = (q[0] - c[0]).powi(2) + (q[1] - c[1]).powi(2) + (q[2] - c[2]).powi(2);
+                        if d < bd {
+                            bd = d;
+                            best = i;
+                        }
+                    }
+                    let c = pal[best];
+                    let idx = ((b * 1024 + (g * 32 + r)) * 4) as usize;
+                    lut[idx] = c[0];
+                    lut[idx + 1] = c[1];
+                    lut[idx + 2] = c[2];
+                    lut[idx + 3] = 255;
+                }
+            }
+        }
+        lut
+    })
 }
 
 /// Linearly blend two 3x3 aperture tables, element by element, at `t` in [0,1]. Used to soften
@@ -1018,7 +1201,8 @@ pub struct App {
     /// computed from already lives, so every `Platform` gets the deduplication for free instead
     /// of each one having to grow its own copy of it.
     last_led: Option<LedState>,
-    /// In-game display filter (panel mask + colour correction), cycled with SELECT+X.
+    /// In-game display filter (panel mask + colour correction), cycled with SELECT+X — which serves
+    /// the art on machines that ship it and the aperture grid on the one that does not.
     display: DisplayFilter,
     /// Which page of `palettes::GB_PALETTES` the palette key is walking, and which cell of that
     /// page the browser has under its caret (`None` while the browser is closed).
@@ -1029,8 +1213,14 @@ pub struct App {
     /// would be a second answer to which fifteen the key is cycling.
     pal_page: usize,
     pal_cursor: Option<usize>,
-    /// The highlighted entry's name, as the frontend rasterised it. One name is ever minted:
-    /// fifteen of them would be fifteen lines of type over fifteen blocks of colour.
+    /// The names of the entries on the page that is up, one face per cell in table order, as the
+    /// frontend rasterised them — **on the machines whose names fit a cell, and empty on the one
+    /// whose do not** (see `palette_names`). One list rather than two, because a panel either
+    /// names its cells or names the one under the caret, and which of those it is can be read off
+    /// this being empty.
+    pal_names: Vec<(TexId, u32, u32)>,
+    /// The entry under the caret, for the tables whose cells carry no names of their own. The
+    /// Game Boy's reading, and the only one it has ever had.
     pal_name: Option<(TexId, u32, u32)>,
     /// The audio latency profile, chosen on the shelf with SELECT+VOL. Read from
     /// `System/audio.txt` at boot and written back whenever it changes.
@@ -1188,6 +1378,7 @@ impl App {
             // chosen, so the first tap of the palette key walks the fifteen around it.
             pal_page: 0,
             pal_cursor: None,
+            pal_names: Vec::new(),
             pal_name: None,
         }
     }
@@ -1217,7 +1408,7 @@ impl App {
         app.root = Some(root.to_path_buf());
         // The display filter (panel mask + colour correction) is read from the card so the
         // shipping look can be a per-card choice, then cycled live during play. The mask falls
-        // back to the built-in LCD3x table; the colour correction falls back to the NOCOLOR (0%
+        // back to the built-in LCD3x table; the colour correction falls back to the grayscale (0%
         // default; the modes fall back to (2, 0) (LCD3X + OFF, the shipped look).
         let lcd3x = crate::root::panel_mask(root).unwrap_or_else(slot_gfx::builtin_panel_mask);
         let nocolor_cc = crate::root::color_correction(root).unwrap_or(DisplayFilter::DEFAULT_CC);
@@ -1226,8 +1417,9 @@ impl App {
         // something else here. `migrate_palette` puts the look back where it was and leaves a
         // marker so it happens exactly once per card.
         crate::root::migrate_palette(root);
-        let (mask_mode, cc) = crate::root::display_modes(root);
-        app.display = DisplayFilter::new(lcd3x, nocolor_cc, mask_mode, cc);
+        crate::root::migrate_display_modes(root);
+        let (mode, cc) = crate::root::display_modes(root);
+        app.display = DisplayFilter::new(lcd3x, nocolor_cc, mode, cc);
         // The page the palette key walks starts on the entry the card left the Game Boy at, so
         // the first tap continues from that palette rather than from page one.
         app.pal_page = app.gb_palette() / slot_ui::PALETTE_PER_PAGE;
@@ -1272,13 +1464,13 @@ impl App {
         app
     }
 
-    /// The mask the game pass should multiply by right now, resolved through the current mask_mode
-    /// (white when the mask is cycled off). Pushed to the compositor every frame.
+    /// The mask the game pass multiplies by, resolved through the current aperture preset.
+    /// Neutral on the two machines with a screen bezel: their lattice is drawn in the game shader
+    /// (`display_grid`) — which is also why it can be *white*, since a multiply table can only
+    /// ever darken. The Advance, which has no overlay to hang a mesh off, is on the table.
     pub fn display_mask(&self) -> [[[u8; 3]; 3]; 3] {
-        // A Game Boy does not use the aperture table at all: its lattice comes from `display_grid`
-        // below, so that the dots and the picture are the same four colours. SELECT+X is therefore
-        // free on this machine and steps the screen art instead — see `Phase::Playing`.
-        self.display.applied_mask(self.current_machine() == System::Gb)
+        self.display
+            .applied_mask(matches!(self.current_machine(), System::Gb | System::Gbc))
     }
 
     /// The Game Boy's four shades right now, whichever of the two tables they came from: a model's
@@ -1307,20 +1499,47 @@ impl App {
 
     /// The panel lattice for the machine that is up, as its colour and how much of it to mix.
     ///
-    /// The colour is the current palette's **lightest shade**, which is the background: a DMG's
-    /// mesh is olive, a Light's is cyan, and neither is written down anywhere — change the
-    /// palette and the lattice follows. `None` on every other machine, where the aperture table
-    /// above still does the work and there is only one shade of lattice there is any sense in.
-    pub fn display_grid(&self) -> Option<([f32; 3], f32)> {
-        let light = self.gb_shades()?[0];
-        Some((
-            [
-                light[0] as f32 / 255.0,
-                light[1] as f32 / 255.0,
-                light[2] as f32 / 255.0,
-            ],
-            DisplayFilter::GB_GRID_MIX,
-        ))
+    /// A Game Boy's colour is the current palette's **lightest shade**, which is the background:
+    /// a DMG's mesh is olive, a Light's is cyan, and neither is written down anywhere — change the
+    /// palette and the lattice follows.
+    ///
+    /// A Game Boy Color has no four shades to take a colour from, so its lattice is plain — white
+    /// or black — and unlike the Game Boy's, which is always on, the Color's is **switched by the
+    /// overlay ring** rather than by a key of its own: every overlay appears once per grid state,
+    /// and the state is the overlay index modulo `GBC_GRID_STATES` (see `overlay_next`). This is
+    /// why the colour machines need no aperture table: the mesh and the bezel are one choice.
+    ///
+    /// An Advance is on the aperture table instead (`display_mask`), so it draws no mesh at all:
+    /// this is the two bezel machines' lattice and nothing else.
+    ///
+    /// The third element is the scanline flag: `true` keeps the bottom row alone.
+    pub fn display_grid(&self) -> Option<([f32; 3], f32, bool)> {
+        match self.current_machine() {
+            System::Gb => {
+                let light = self.gb_shades()?[0];
+                Some((
+                    [
+                        light[0] as f32 / 255.0,
+                        light[1] as f32 / 255.0,
+                        light[2] as f32 / 255.0,
+                    ],
+                    DisplayFilter::GB_GRID_MIX,
+                    false,
+                ))
+            }
+            System::Gbc => {
+                if self.overlay_slot != 1 {
+                    return None;
+                }
+                let colour = match self.overlay_index % DisplayFilter::GBC_GRID_STATES {
+                    1 => [1.0, 1.0, 1.0],
+                    2 => [0.0, 0.0, 0.0],
+                    _ => return None,
+                };
+                Some((colour, DisplayFilter::GBC_GRID_MIX, false))
+            }
+            System::Gba => None,
+        }
     }
 
     /// Which machine the display filter is being asked about: the cart under the caret, which
@@ -1357,7 +1576,13 @@ impl App {
     pub fn display_palette(&self) -> Option<[u8; 1024]> {
         let machine = self.current_machine();
         if machine != System::Gb {
-            return None;
+            // A colour machine looks through a ramp only when its grade is a duotone: everything
+            // else down the list is a matrix or a baked cube, which have their own paths.
+            let mode = self.display.cc[DisplayFilter::machine_slot(machine)] as usize;
+            return match GRADES[mode.min(GRADES.len() - 1)].kind {
+                GradeKind::Ramp(dark, light) => Some(ramp_lut(dark, light)),
+                _ => None,
+            };
         }
         // 原生灰 is the core's own greys, so there is nothing to look up — and only the *table's*
         // own entry means that. A model is always a palette: its four shades are the other half of
@@ -1383,23 +1608,40 @@ impl App {
         crate::palettes::GB_PALETTES[self.gb_palette()].0
     }
 
-    /// 当前色彩校正该用的 gamma：FULLCOLOR(0)/NOCOLOR(2) 保持 1.0（编码空间，旧行为），
-    /// 半彩(1) 与四档单色背光(3..=6) 用 `CC_GAMMA` 在线性空间里做。
+    /// 当前色彩校正该用的 gamma：灰度(0) 保持 1.0（编码空间直乘，黑白不压暗）；
+    /// AGB-001(1)/NDS(2) 走线性空间，AGB-001 用 2.2（更暗）、NDS 用 2.0（稍亮）。
     /// GB 的色板同理：原生灰走 1.0（本来就是核心给的灰），其余色板都走 `CC_GAMMA`
     /// —— LUT 的插值要在线性空间里做，否则中间两档会被压暗。
     pub fn display_cc_gamma(&self) -> f32 {
         let machine = self.current_machine();
         let mode = self.display.cc[DisplayFilter::machine_slot(machine)] as usize;
-        let flat = if machine == System::Gb {
-            mode == crate::palettes::GB_NEUTRAL
+        if machine == System::Gb {
+            if mode == crate::palettes::GB_NEUTRAL
                 && App::model_of_index(self.overlay_slot, self.overlay_index).is_none()
-        } else {
-            mode == 0 || mode == 2
-        };
-        if flat {
-            1.0
-        } else {
-            DisplayFilter::CC_GAMMA
+            {
+                return 1.0;
+            }
+            return DisplayFilter::CC_GAMMA;
+        }
+        match GRADES[(mode as usize).min(GRADES.len() - 1)].kind {
+            GradeKind::Matrix(_, g) => g,
+            // A ramp or a baked cube is drawn by a lookup, and the lookup is built in the space
+            // the shader samples it in — so there is no linearisation to ask for.
+            _ => 1.0,
+        }
+    }
+
+    /// The pixel-art lookup when the pixel grade is in force on a colour machine, else `None`.
+    /// `frontend` pushes it every frame, the same way it pushes the Game Boy's palette.
+    pub fn display_pixel_lut(&self) -> Option<&[u8]> {
+        let machine = self.current_machine();
+        if machine == System::Gb {
+            return None;
+        }
+        let mode = self.display.cc[DisplayFilter::machine_slot(machine)] as usize;
+        match GRADES[mode.min(GRADES.len() - 1)].kind {
+            GradeKind::Lut(bytes) => Some(bytes),
+            _ => None,
         }
     }
 
@@ -1431,18 +1673,19 @@ impl App {
         self.hud.toast(said, self.now());
     }
 
-    /// SELECT+X: advance the panel mask (OFF -> LCD3X 50% -> LCD3X 100% -> SCANLINE 50% ->
-    /// SCANLINE 100%) and persist both modes to `System/display.txt`.
+    /// SELECT+X on an Advance: step the aperture table through its `MASK_STATES` presets (off ->
+    /// LCD3X at 25, 50, 75 and 100% -> SCANLINE at 50 and 100%) and persist the choice to
+    /// `System/display.txt`.
     fn cycle_mask(&mut self) {
         self.display.cycle_mask();
         if let Some(root) = &self.root {
             crate::root::write_display_modes(root, self.display.mask_mode, self.display.cc);
         }
     }
+
     /// SELECT+Y: advance the colour correction of the machine that is up, and persist all of
-    /// them to `System/display.txt`. On a colour machine that is FULLCOLOR -> HALFCOLOR ->
-    /// NOCOLOR -> DMG green -> ice-blue -> amber -> pink backlight; on a Game Boy it is the next
-    /// palette on the page the browser last showed.
+    /// them to `System/display.txt`. On a colour machine that is grayscale -> AGB-001 -> NDS;
+    /// on a Game Boy it is the next palette on the page the browser last showed.
     ///
     /// **One page, not the whole table.** The Game Boy's list is every palette gambatte ships —
     /// hundreds of them — and a key that walked all of them would be a key nobody could aim. The
@@ -1464,10 +1707,33 @@ impl App {
             }
             self.step_palette();
         } else {
-            self.display.cycle_cc(self.current_machine());
+            // A colour machine's list is two pages of nine, and the tap walks **the page the
+            // grade in hand is on** — so `pal_page` is not consulted at all. It counts pages of
+            // the Game Boy's hundreds-long palette table (`boot` seeds it from the GB slot), and
+            // reading it here put the walk's base far past the end of an eighteen-entry list:
+            // `cycle_on_page` then answered the last entry for ever, which is exactly the "the
+            // key works once" the user saw. Deriving the page from the index keeps the two
+            // tables apart and needs no second piece of state.
+            let machine = self.current_machine();
+            let slot = DisplayFilter::machine_slot(machine);
+            let per = App::grades_per_page(machine);
+            let at = self.display.cc[slot] as usize;
+            let page = (at / per).min(GRADES.len().div_ceil(per).saturating_sub(1));
+            let next = slot_store::cycle_on_page(page, at, GRADES.len(), per);
+            self.display.cc[slot] = next as u16;
         }
         if let Some(root) = &self.root {
             crate::root::write_display_modes(root, self.display.mask_mode, self.display.cc);
+        }
+    }
+
+    /// How many grades one page of the colour browser shows. The Game Boy's table is fifteen to a
+    /// page (three columns of five); a colour machine's list is two pages of nine, three by three.
+    pub fn grades_per_page(machine: System) -> usize {
+        if machine == System::Gb {
+            slot_ui::PALETTE_PER_PAGE
+        } else {
+            9
         }
     }
 
@@ -1718,11 +1984,21 @@ impl App {
         self.shelf.face_of(i)
     }
 
+    /// Drop the overlay the previous cart left on screen, for a cart whose system has no overlay
+    /// set (GBA) or a card carrying no art for its system. `overlay_pixels` becomes `None` and
+    /// `overlay_dirty` is set, so the frontend releases the GL texture and the built-in look
+    /// stands. Used in place of `set_overlay_set` for GBA: GBA would otherwise be read as
+    /// `slot` 0 (GB) and re-decode a Game Boy model overlay onto a GBA game.
+    pub(crate) fn clear_overlay_set(&mut self) {
+        self.overlay_pixels = None;
+        self.overlay_dirty = true;
+    }
+
     /// Hand the seated cart's overlay set to the app, from `Session::spawn_core`: every
     /// `Overlay/<sys>.png` / `<sys>-NN.png` for the cart's system, in rotation order (`slot` 0
-    /// for GB, 1 for GBC), with the persisted index for that system applied. `list` empty for
-    /// GBA — or a card with no art — clears the overlay. The chosen file is decoded here and
-    /// `overlay_dirty` is set so the frontend re-mints the GL texture once.
+    /// for GB, 1 for GBC), with the persisted index for that system applied. The chosen file is
+    /// decoded here and `overlay_dirty` is set so the frontend re-mints the GL texture once.
+    /// GBA has no overlay set at all and is routed through `clear_overlay_set` instead.
     pub(crate) fn set_overlay_set(&mut self, list: Vec<crate::root::OverlayFile>, slot: usize) {
         self.overlay_list = list;
         let slot = slot.min(1);
@@ -1736,13 +2012,15 @@ impl App {
         self.refresh_overlay_pixels();
     }
 
-    /// How many overlay choices a system has. A Game Boy's three models come first and the
-    /// card's own overlays after them; a Game Boy Color has only its overlays.
+    /// How many overlay choices a system has. A Game Boy's three models come first and the card's
+    /// own overlays after them; a Game Boy Color offers each of its overlays once per grid state
+    /// (without, white, black — `GBC_GRID_STATES` of them), so the mesh is switched by walking the
+    /// ring rather than by a key of its own.
     fn overlay_choices(slot: usize, ordinary: usize) -> usize {
         if slot == 0 {
             DisplayFilter::GB_MODEL_COUNT + ordinary
         } else {
-            ordinary
+            ordinary * DisplayFilter::GBC_GRID_STATES
         }
     }
 
@@ -1757,7 +2035,9 @@ impl App {
         let at = if self.overlay_slot == 0 {
             self.overlay_index.saturating_sub(DisplayFilter::GB_MODEL_COUNT)
         } else {
-            self.overlay_index
+            // A Game Boy Color's ring carries each overlay's grid states in a row, so the overlay
+            // is one entry in `GBC_GRID_STATES` — see `overlay_choices`.
+            self.overlay_index / DisplayFilter::GBC_GRID_STATES
         };
         self.overlay_list.get(at)
     }
@@ -1805,10 +2085,19 @@ impl App {
         self.overlay_tex
     }
 
-    /// SELECT+R2: step to the next overlay for the highlighted cart's system (the one in the
-    /// slot while a game is playing). A system with a single file has nothing to rotate, and
-    /// GBA has no overlay set at all; both are silent no-ops rather than a refusal, since the
-    /// press is a step through a ring and a card may simply carry one image.
+    /// Step to the next overlay for the highlighted cart's system (the one in the slot while a
+    /// game is playing). Reached from SELECT+X on a Game Boy and a Game Boy Color, and from
+    /// SELECT+R2 as well on the Game Boy.
+    ///
+    /// A Game Boy Color's ring is **`GBC_GRID_STATES` times as long as its art**: every overlay is
+    /// offered without the grid, with a white one, and with a black one, so the mesh is a set of
+    /// further states of each overlay rather than a setting of its own. The choice is therefore an
+    /// index into that ring, and both the art and the grid are read back out of it — see
+    /// `ordinary_overlay_at` and `display_grid`.
+    ///
+    /// A system with a single file has nothing to rotate, and an Advance has no overlay set at
+    /// all; both are silent no-ops rather than a refusal, since the press is a step through a
+    /// ring and a card may simply carry one image.
     fn overlay_next(&mut self) {
         let Some(system) = self.shelf.current_cart().map(|c| c.system()) else {
             return;
@@ -2451,12 +2740,11 @@ impl App {
                 Action::GbaDown(Btn::Start) if self.core_picker.is_none() => {
                     self.open_core_picker()
                 }
-                // Colour correction (SELECT+Y) still applies here, because it recolours the
-                // carts themselves. The panel mask (SELECT+X) and the screen overlay
-                // (SELECT+R2) are the game panel's alone and are answered in `Phase::Playing`
-                // only — on the shelf they do nothing. The shelf cycle is a hold of Y now,
-                // spent in `sys_hold`, not a chord.
-                Action::ColorCycle if self.core_picker.is_none() => self.cycle_cc(),
+                // Colour correction (SELECT+Y) is the game panel's now: the shelf no longer
+                // changes it, so that chord is free on this screen to be bound to something
+                // else. The two screen keys — SELECT+X and SELECT+R2 — were already the game
+                // panel's alone and are answered in `Phase::Playing` only. The shelf cycle is a
+                // hold of Y, spent in `sys_hold`, not a chord.
                 // SELECT+VOL, and the shelf is the only screen that answers it: the change
                 // reopens the audio device, which is free here and a gap in the sound anywhere
                 // else. See `Action::AudioProfileNext`.
@@ -2510,7 +2798,14 @@ impl App {
                 // Y holds to swap which machine's shelf is up. Nothing fires on the press: the
                 // hold is spent in `sys_hold` on the timer and the release only clears.
                 Action::GbaDown(Btn::Y) => self.sys_held = Some(now),
-                Action::GbaUp(Btn::Y) => self.sys_held = None,
+                // A tap walks this machine's subfolders; a hold (`sys_hold`) swaps the machine
+                // instead and has already spent `sys_held` by this point — so `take()` coming back
+                // `Some` is exactly "the press was a tap".
+                Action::GbaUp(Btn::Y) => {
+                    if self.sys_held.take().is_some() {
+                        self.cycle_folder();
+                    }
+                }
                 // (长按 B 起 WiFi 直连的入口已按用户要求移除——功能暂缓。)
                 Action::Insert => self.insert(false),
                 _ => {}
@@ -2520,23 +2815,25 @@ impl App {
             Phase::Inserting { .. } if action == Action::Eject => self.eject(),
             Phase::Playing { .. } => match action {
                 Action::Eject => self.eject(),
-                // SELECT+X. The chord is the same on both machines and it means the thing the
-                // machine can actually use: on a Game Boy the grid is fixed at LCD3X 50% (see
-                // `display_mask`) and the key is the way through the models and the card's own
-                // screen art, which is the choice that matters when the picture has four shades
-                // and the panel around it is the rest of the look.
-                Action::MaskCycle if self.current_machine() == System::Gb => self.overlay_next(),
+                // SELECT+X. The same chord, and it means whichever of the two the machine has:
+                // the machines with a screen bezel walk their art (`Overlay/` — a Game Boy's three
+                // models and the card's own files, a Game Boy Color's files, each of the Color's
+                // repeated `GBC_GRID_STATES` times so the mesh rides its entry), and the one
+                // machine that ships no art at all — the Advance — steps its `MASK_STATES`
+                // aperture presets instead (off, the LCD3X table at four strengths, the scanline
+                // at two). Art where there is art, grid where there is none.
+                Action::MaskCycle if self.current_machine() != System::Gba => self.overlay_next(),
                 Action::MaskCycle => self.cycle_mask(),
                 Action::ColorCycle => self.cycle_cc(),
                 // The long half of the same key. Held, SELECT+Y opens the browser; tapped, it
-                // walks the page. Only a Game Boy has a table long enough to need browsing, and
-                // the shelf has no palette on screen to change, so the hold lands nowhere else.
-                Action::ColorHold if self.current_machine() == System::Gb => {
-                    self.open_palette_browser()
-                }
-                // The overlay is on screen here, so this is where rotating it is *seen*; the
-                // choice is written to the card all the same.
-                Action::OverlayNext => self.overlay_next(),
+                // walks the page. Both machines want it: a Game Boy's table is hundreds long and
+                // cannot be walked at all without one, and a colour machine's eighteen grades are
+                // two pages that a hold is the only way to compare side by side. The shelf has no
+                // picture on screen to recolour, so the hold lands nowhere else.
+                Action::ColorHold => self.open_palette_browser(),
+                // (SELECT+R2 used to land here as a second key to the overlay ring. It is gone
+                // from the chord table: on a Game Boy it did exactly what SELECT+X does, and on
+                // the other two machines it did nothing — see `slot_input::gesture::chord`.)
                 Action::GameMenu => self.open_game_menu(),
                 Action::Polaroids => self.open_polaroids(),
                 Action::SaveState => self.save_state(),
@@ -3972,6 +4269,22 @@ impl App {
         self.retally_letters();
     }
 
+    /// A tap of Y on the shelf: step the current machine's subfolder filter — all, then each of
+    /// its folders, then all again. A machine whose roms all sit loose in its own folder has
+    /// nothing to step, and the press is refused rather than dropped, so it reads as answered.
+    fn cycle_folder(&mut self) {
+        if !self.shelf.cycle_folder(self.shelf_system) {
+            return self.refuse();
+        }
+        let keep = self.shelf.current_cart().map(|c| c.stem.clone());
+        let view = self.system_view(self.shelf_system);
+        self.shelf.set_view(view, keep.as_deref());
+        self.retally_letters();
+        // The view is a different set of carts, so the resident window has to be rebuilt the way
+        // a machine switch rebuilds it: the screen would otherwise fill with stand-ins.
+        self.shelf_dirty = true;
+    }
+
     /// The starred carts of the machine whose shelf is up, in library order so a cart sits on
     /// the same shelf, at the same place among its neighbours, as the one it came from.
     /// Refused rather than shown empty when nothing is starred: an empty shelf is a screen with
@@ -4432,27 +4745,59 @@ impl App {
     /// Hold of the palette key: the browser, on the page the key is walking, with the caret on the
     /// palette that is actually up.
     ///
-    /// A Game Boy's list is hundreds of entries and this is the only way to see them; the colour
-    /// machines have seven and no browser at all. Only while a game is running, too: there is no
-    /// picture on the shelf to recolour, and a hold there is simply nothing.
+    /// A Game Boy's list is hundreds of entries and this is the only way to see them; a colour
+    /// machine's is eighteen, which is two pages and the reason it has a browser at all rather
+    /// than a ring of eighteen presses. Only while a game is running, too: there is no picture on
+    /// the shelf to recolour, and a hold there is simply nothing.
     ///
     /// **Refused while a model is up**, for the reason `cycle_cc` gives: a model's four shades are
     /// bound to its screen art, so a browser that offered to recolour the picture inside that case
     /// would be offering something it could not then do. Refused rather than dropped, so the press
     /// reads as answered.
     fn open_palette_browser(&mut self) {
-        if self.pal_cursor.is_some() || self.current_machine() != System::Gb {
+        if self.pal_cursor.is_some() {
             return;
         }
         if !matches!(self.phase, Phase::Playing { .. }) {
             return;
         }
-        if App::model_of_index(self.overlay_slot, self.overlay_index).is_some() {
+        // A model's art is bound to its shades, on a Game Boy; nothing else here refuses.
+        if self.current_machine() == System::Gb
+            && App::model_of_index(self.overlay_slot, self.overlay_index).is_some()
+        {
             self.refuse();
             return;
         }
-        let base = self.pal_page * slot_ui::PALETTE_PER_PAGE;
-        self.pal_cursor = Some(self.gb_palette().saturating_sub(base));
+        // The page and the caret both come from the entry actually in hand, so the browser opens
+        // on the one that is up. Deriving the page rather than reading `pal_page` is what keeps a
+        // colour machine's two pages of nine away from the Game Boy's page count of its own
+        // hundreds-long table — the two are not the same number and never were.
+        let machine = self.current_machine();
+        let per = App::grades_per_page(machine);
+        let at = self.display.cc[DisplayFilter::machine_slot(machine)] as usize;
+        self.pal_page = at / per;
+        self.pal_cursor = Some(at.saturating_sub(self.pal_page * per));
+    }
+
+    /// How many entries the browser's table has for the machine that is up.
+    fn browser_total(&self, machine: System) -> usize {
+        if machine == System::Gb {
+            crate::palettes::GB_PALETTES.len()
+        } else {
+            GRADES.len()
+        }
+    }
+
+    /// The name of one of those entries, and the swatch its cell is painted with: a Game Boy's own
+    /// four shades, or the grade walked from black to white (`grade_swatch`).
+    fn browser_entry(&self, machine: System, at: usize) -> (&'static str, slot_ui::PaletteSwatch) {
+        if machine == System::Gb {
+            let e = &crate::palettes::GB_PALETTES[at.min(crate::palettes::GB_PALETTES.len() - 1)];
+            (e.0, slot_ui::PaletteSwatch::shades(e.1))
+        } else {
+            let g = &GRADES[at.min(GRADES.len() - 1)];
+            (g.name, grade_swatch(g))
+        }
     }
 
     fn close_palette_browser(&mut self) {
@@ -4470,8 +4815,9 @@ impl App {
         let Some(cursor) = self.pal_cursor else {
             return;
         };
-        let total = crate::palettes::GB_PALETTES.len();
-        let per = slot_ui::PALETTE_PER_PAGE;
+        let machine = self.current_machine();
+        let total = self.browser_total(machine);
+        let per = App::grades_per_page(machine);
         match action {
             Action::GbaDown(Btn::Left) | Action::ShelfLeft => {
                 self.pal_cursor = Some(slot_store::step_cursor(self.pal_page, cursor, -1, total, per));
@@ -4500,7 +4846,7 @@ impl App {
             }
             Action::GbaDown(Btn::A) => {
                 let picked = slot_store::index_of(self.pal_page, cursor, total, per);
-                self.display.cc[DisplayFilter::machine_slot(System::Gb)] = picked as u16;
+                self.display.cc[DisplayFilter::machine_slot(machine)] = picked as u16;
                 if let Some(root) = &self.root {
                     crate::root::write_display_modes(root, self.display.mask_mode, self.display.cc);
                 }
@@ -4511,15 +4857,60 @@ impl App {
         }
     }
 
-    /// The name of the entry under the browser's caret, or `None` while it is shut. The frontend
-    /// mints a face from this and nothing else; comparing it to the last one it built is what
-    /// keeps a moved caret to one rasterise and a still one to none.
+    /// What the browser's row of names is keyed on: the machine and the page that is up, or
+    /// `None` while it is shut.
+    ///
+    /// A key rather than the names themselves, because a page's names are a compile-time fact
+    /// about a table that never changes: the frontend rebuilds its fifteen faces when this moves
+    /// and at no other time, so a caret walking inside a page costs nothing at all.
+    pub fn palette_names_key(&self) -> Option<(System, usize)> {
+        self.pal_cursor.map(|_| (self.current_machine(), self.pal_page))
+    }
+
+    /// The names of the entries on that page, in table order — one per cell, so every cell says
+    /// what it is rather than only the one the caret is on. As long as the page and no longer:
+    /// the last page of a table is the short one.
+    ///
+    /// **Empty on a Game Boy, and that is the whole of why this can be empty.** A cell is 196
+    /// pixels wide and a colour machine's nine grades are named in four to six characters apiece,
+    /// so they fit under their own cells and the page can be read across. A Game Boy's 343
+    /// palettes are named by the core and the names are *long*: measured in the face the machine
+    /// carries, 263 of them are wider than a cell at the type size the grades are set in, and the
+    /// longest is still 30 pixels too wide at ten. Those pages keep the one line at the foot of
+    /// the panel (`palette_name_want`), which has 640 pixels to work in and so never cuts a name.
+    pub fn palette_names(&self) -> Vec<String> {
+        let machine = self.current_machine();
+        if machine == System::Gb {
+            return Vec::new();
+        }
+        let per = App::grades_per_page(machine);
+        let total = self.browser_total(machine);
+        let base = (self.pal_page * per).min(total);
+        let n = slot_store::len_on(self.pal_page, total, per);
+        (0..n)
+            .map(|i| self.browser_entry(machine, base + i).0.to_string())
+            .collect()
+    }
+
+    /// The faces the frontend built for that page, in the same order.
+    pub(crate) fn set_palette_names(&mut self, names: Vec<(TexId, u32, u32)>) {
+        self.pal_names = names;
+    }
+
+    /// The name of the entry under the browser's caret, or `None` while it is shut **or on a
+    /// machine whose cells are named** — the two readings are exclusive, and neither machine has
+    /// both. The frontend mints a face from this and nothing else; comparing it to the last one it
+    /// built is what keeps a moved caret to one rasterise and a still one to none.
     pub fn palette_name_want(&self) -> Option<String> {
         let cursor = self.pal_cursor?;
-        let per = slot_ui::PALETTE_PER_PAGE;
-        let total = crate::palettes::GB_PALETTES.len();
+        let machine = self.current_machine();
+        if machine != System::Gb {
+            return None;
+        }
+        let per = App::grades_per_page(machine);
+        let total = self.browser_total(machine);
         let at = slot_store::index_of(self.pal_page, cursor, total, per);
-        Some(crate::palettes::GB_PALETTES[at].0.to_string())
+        Some(self.browser_entry(machine, at).0.to_string())
     }
 
     /// The face the frontend built for that name.
@@ -4533,23 +4924,25 @@ impl App {
         let Some(cursor) = self.pal_cursor else {
             return;
         };
-        let per = slot_ui::PALETTE_PER_PAGE;
-        let total = crate::palettes::GB_PALETTES.len();
+        let machine = self.current_machine();
+        let per = App::grades_per_page(machine);
+        let total = self.browser_total(machine);
         let base = (self.pal_page * per).min(total);
         let n = slot_store::len_on(self.pal_page, total, per);
-        // A copy of the page's four shades, at most fifteen entries and only while the browser is
-        // open. The alternative is a second compile-time array of the same 347 rows, which is
-        // exactly the parallel table that drifts the first time one of them is edited.
-        let shades: Vec<[[u8; 3]; 4]> = crate::palettes::GB_PALETTES[base..base + n]
-            .iter()
-            .map(|entry| entry.1)
+        // A copy of the page's swatches, at most fifteen of them and only while the browser is
+        // open. A Game Boy's entries carry their own four shades; a colour grade's cell is the
+        // grade itself walked from black to white (`grade_swatch`).
+        let swatches: Vec<slot_ui::PaletteSwatch> = (base..base + n)
+            .map(|at| self.browser_entry(machine, at).1)
             .collect();
         let view = slot_ui::PaletteView {
             page: self.pal_page,
             cursor,
-            pages: slot_ui::palette_pages(total),
-            shades: &shades,
-            name: self.pal_name,
+            pages: slot_ui::palette_pages(total, per),
+            rows: slot_ui::palette_rows(per),
+            swatches: &swatches,
+            names: &self.pal_names,
+            foot: self.pal_name,
         };
         slot_ui::draw_palette_browser(&view, out);
     }

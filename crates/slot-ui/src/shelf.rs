@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use slot_gfx::{Draw, TexId, OUT_W};
 use slot_store::Cart;
 
@@ -123,6 +125,14 @@ pub struct Shelf {
     /// ones), so any measurement of "how far away is this cart" that walks `carts` is measuring
     /// the wrong thing.
     machines: [Vec<usize>; 3],
+    /// Each machine's own subfolders, sorted and distinct — the folders `folder_pick` chooses
+    /// among. A cart loose in its machine's folder contributes none; the folders are read off the
+    /// roms' own paths (`Games/<machine>/<folder>/<rom>`), so a card that files its games per
+    /// machine and then per language needs no second index to be switchable.
+    folders: [Vec<String>; 3],
+    /// Which of a machine's subfolders its shelf is showing, or `None` for all of them. Per
+    /// machine, so a folder picked on one shelf is still picked when the user comes back to it.
+    folder_pick: [Option<usize>; 3],
     /// One entry per cart: its position in its own machine's shelf, or `u32::MAX` for a cart no
     /// shelf shows. Where a switch to that machine lands is the *front* of this list, which is
     /// what makes the front of every machine the set worth keeping faces for.
@@ -167,6 +177,18 @@ impl Shelf {
             pos_in_machine[i] = list.len() as u32;
             list.push(i);
         }
+        let mut folders: [Vec<String>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+        for c in &carts {
+            let slot = Self::machine_slot(c.system());
+            if let Some(f) = folder_of(&c.rom, c.system().dir_name()) {
+                if !folders[slot].contains(&f) {
+                    folders[slot].push(f);
+                }
+            }
+        }
+        for f in folders.iter_mut() {
+            f.sort();
+        }
         let mut pos_in_view = vec![u32::MAX; carts.len()];
         for (p, &i) in view.iter().enumerate() {
             pos_in_view[i] = p as u32;
@@ -174,6 +196,8 @@ impl Shelf {
         Shelf {
             carts,
             machines,
+            folders,
+            folder_pick: [None, None, None],
             pos_in_machine,
             pos_in_view,
             system: System::Gba,
@@ -399,9 +423,45 @@ impl Shelf {
         }
     }
 
-    /// One machine's shelf: its carts as library indices, in the order the row shows them.
+    /// One machine's shelf: its carts as library indices, in the order the row shows them, cut to
+    /// the subfolder `folder_pick` has chosen for that machine (`None` leaves all of them).
     pub fn machine_view(&self, s: System) -> Vec<usize> {
-        self.machines[Self::machine_slot(s)].clone()
+        let slot = Self::machine_slot(s);
+        let all = &self.machines[slot];
+        let Some(name) = self.folder_pick[slot].and_then(|p| self.folders[slot].get(p)) else {
+            return all.clone();
+        };
+        all.iter()
+            .copied()
+            .filter(|&i| {
+                folder_of(&self.carts[i].rom, s.dir_name()).as_deref() == Some(name.as_str())
+            })
+            .collect()
+    }
+
+    /// Step one machine's subfolder filter: all -> the first folder -> ... -> all. `false` when
+    /// the machine has no subfolders, so the caller can refuse the press rather than let it read
+    /// as a key that worked.
+    pub fn cycle_folder(&mut self, s: System) -> bool {
+        let slot = Self::machine_slot(s);
+        let n = self.folders[slot].len();
+        if n == 0 {
+            return false;
+        }
+        self.folder_pick[slot] = match self.folder_pick[slot] {
+            None => Some(0),
+            Some(p) if p + 1 < n => Some(p + 1),
+            Some(_) => None,
+        };
+        true
+    }
+
+    /// The subfolder one machine's shelf is showing, or `None` when it is showing them all.
+    pub fn folder_name(&self, s: System) -> Option<&str> {
+        let slot = Self::machine_slot(s);
+        self.folders[slot]
+            .get(self.folder_pick[slot]?)
+            .map(String::as_str)
     }
 
     /// How far a cart is from the caret that would be showing it.
@@ -803,6 +863,35 @@ impl Shelf {
         }
         out
     }
+}
+
+/// The directory the scanner reads games out of, spelled as the scanner spells it. Kept here only
+/// so `folder_of` can tell a subfolder from the root the subfolders live under.
+const GAMES_DIR: &str = "Games";
+
+/// The subfolder a cart is filed under, for the shelf's per-machine folder switch.
+///
+/// A card may file its games however it likes under `Games/`: loose (`Games/x.gba`), one level of
+/// machine folder (`Games/GBA/x.gba`), a folder inside that (`Games/GBA/GBA中文/x.gba`), or with no
+/// machine folder at all (`Games/GBA中文/x.gba`) — the machine is read off the *extension*, so all
+/// four layouts are the same card to everything else. The subfolder is therefore whatever sits
+/// between the machine (when there is one) and the file: the name directly above the rom, and
+/// `None` when that name is the machine folder or the `Games` root itself. Both of those are
+/// otherwise ordinary directory names, which is exactly why the root is found by name rather than
+/// by counting — a loose rom's parent is `Games`, and mistaking that for a folder would offer a
+/// "subfolder" on every flat card and switch to a set of carts identical to the one already up.
+fn folder_of(rom: &Path, machine: &str) -> Option<String> {
+    let parts: Vec<&str> = rom
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+    let root = parts.iter().rposition(|p| *p == GAMES_DIR)?;
+    let mut rest = &parts[root + 1..];
+    if rest.first() == Some(&machine) {
+        rest = &rest[1..];
+    }
+    // Whatever is left in front of the file is the subfolder, if any is left at all.
+    (rest.len() >= 2).then(|| rest[0].to_string())
 }
 
 /// How solid the shadow under a dimmed cart is. It carries the whole of the cart's opacity

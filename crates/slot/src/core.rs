@@ -92,7 +92,7 @@ pub fn open_core_for(
     //  - `mgba_gb_colors = Grayscale`: the "Default Game Boy Palette" — the palette mGBA uses
     //    for plain DMG Game Boy carts (anything not GBC/SGB-compatible). Forcing it to
     //    Grayscale makes every monochrome GB game render as true black & white, so SLOT's
-    //    colour-correction filters (NOCOLOR, DMG-green / ice-blue / amber / pink backlights)
+    //    colour-correction filters (GRAYSCALE / AGB-001 / NDS for the colour machines)
     //    ride on a clean grayscale base instead of mGBA's colourised one. GBC and GBA carts
     //    ignore it — GBC uses its own ROM palettes, GBA is not GB — so setting it for every
     //    mGBA cart is harmless.
