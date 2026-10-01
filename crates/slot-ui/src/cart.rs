@@ -135,6 +135,10 @@ impl CartSize {
 
     /// The same panel against any size, for a caller drawing the cart smaller than its face —
     /// the row draws placeholders at the quad's size and needs the panel in those units.
+    ///
+    /// **Corners, not a size**: `(x0, y0, x1, y1)`, exactly as `label` stores them. A caller
+    /// that wants to fill or paste *inside* the panel wants `label_box` instead; the two were
+    /// confused once and cost every card with a game on it its boot.
     pub fn label_panel_at(&self, w: u32, h: u32) -> (u32, u32, u32, u32) {
         let p = |v: u32, of: u32| (of * v + 500) / 1000;
         (
@@ -143,6 +147,15 @@ impl CartSize {
             p(self.label[2], w),
             p(self.label[3], h),
         )
+    }
+
+    /// The panel as an origin and a size — `(x, y, w, h)`. What every caller that draws into
+    /// the panel wants, because a pasted label is sized, not cornered: `label_panel`'s third
+    /// and fourth numbers are the far edge, and handing those to `paste_label` as a width and
+    /// a height pastes a label wider and taller than the cart it is going onto.
+    pub fn label_box(&self) -> (u32, u32, u32, u32) {
+        let (x0, y0, x1, y1) = self.label_panel();
+        (x0, y0, x1 - x0, y1 - y0)
     }
 }
 
@@ -208,7 +221,7 @@ pub fn cart_placeholder(size: CartSize, system: slot_store::System) -> CartFace 
     let shell = shell_for("");
     let mut face = shell_face(&shell, size, system);
     mould_detail(&mut face, &shell, size, system);
-    recess_label(&mut face, &shell, size.label_panel());
+    recess_label(&mut face, &shell, size.label_box());
     clip_to_silhouette(&mut face, size, system);
     face
 }
@@ -223,7 +236,7 @@ pub fn cart_face(cart: &Cart) -> CartFace {
         return face;
     }
 
-    let (lx, ly, lw, lh) = size.label_panel();
+    let (lx, ly, lw, lh) = size.label_box();
 
     let t = std::time::Instant::now();
     let mut face = shell_face(&shell, size, system);
@@ -389,21 +402,42 @@ fn recess_label(face: &mut CartFace, shell: &Shell, panel: (u32, u32, u32, u32))
 
 /// Source over, so a label with an alpha channel shows the shell through it rather than
 /// punching a hole in the cart.
+///
+/// Credited rather than trusted: `panel` is `(x, y, w, h)`, the label is `w * h` pixels, and
+/// both are clipped to the face rather than assumed to fit inside it. The panel used to be
+/// handed in as corners, which pasted a label a corner's width too wide and a corner's height
+/// too tall, and the write past the end of the face took the whole frontend down before its
+/// first frame — on any card with a game on it, so the machine came up as a boot loop. A
+/// labelled cart drawn slightly wrong is a bug; a panic here is a handheld that cannot start.
 fn paste_label(face: &mut CartFace, label: &[u8], panel: (u32, u32, u32, u32)) {
     let (lx, ly, lw, lh) = panel;
     let face_w = face.w;
     for y in 0..lh {
+        // Past the bottom of the face, so is every row below this one.
+        if y + ly >= face.h {
+            break;
+        }
         for x in 0..lw {
+            if x + lx >= face_w {
+                break;
+            }
             let s = ((y * lw + x) * 4) as usize;
-            let a = label[s + 3] as u32;
+            // The same mistake from the other side: a label buffer shorter than the panel it
+            // is being pasted into. Clipped too, for the same reason.
+            let Some(src) = label.get(s..s + 4) else {
+                break;
+            };
+            let a = src[3] as u32;
             if a == 0 {
                 continue;
             }
             let d = (((y + ly) * face_w + x + lx) * 4) as usize;
+            if d + 4 > face.rgba.len() {
+                continue;
+            }
             for c in 0..3 {
                 face.rgba[d + c] =
-                    ((label[s + c] as u32 * a + face.rgba[d + c] as u32 * (255 - a) + 127) / 255)
-                        as u8;
+                    ((src[c] as u32 * a + face.rgba[d + c] as u32 * (255 - a) + 127) / 255) as u8;
             }
         }
     }

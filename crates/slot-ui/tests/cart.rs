@@ -1,7 +1,7 @@
-use slot_store::scan;
+use slot_store::{scan, System};
 use slot_ui::{
-    cart_face, clean_label, label_colour, label_panel, label_text, silhouette, CART_H, CART_W,
-    FACE_H, FACE_W, LABEL_H, LABEL_W, LABEL_X, LABEL_Y, OUT_W,
+    cart_face, cart_placeholder, cart_shadow, clean_label, label_colour, label_panel, label_text,
+    silhouette, size_for, CART_H, CART_W, FACE_H, FACE_W, LABEL_H, LABEL_W, LABEL_X, LABEL_Y, OUT_W,
 };
 use tempfile::TempDir;
 
@@ -311,7 +311,7 @@ fn a_rom_with_no_header_title_is_labelled_from_its_stem() {
 /// reachable here; the shape and the colour are.
 #[test]
 fn the_cart_shadow_is_the_cart_in_black() {
-    let s = slot_ui::cart_shadow();
+    let s = cart_shadow(size_for(System::Gba), System::Gba);
     // Same resolution as the face it backs, because it is drawn into the same quad.
     assert_eq!((s.w, s.h), (FACE_W, FACE_H));
     let mask = silhouette(FACE_W, FACE_H);
@@ -323,4 +323,68 @@ fn the_cart_shadow_is_the_cart_in_black() {
         s.rgba.chunks_exact(4).any(|p| p[3] > 250),
         "the shadow is transparent everywhere, so it backs nothing"
     );
+}
+
+/// Every machine's label panel has to fit inside that machine's own face.
+///
+/// The panel is stored per mille of the face and read back as pixels, and the two are one
+/// rounding apart — but `label_panel`'s last two numbers are the far **corner**, and they were
+/// handed to `paste_label` as a width and a height. The Advance cart pasted a 437 x 233 label
+/// onto a 480 x 270 face and the last 24 rows went past the end of it: `index out of bounds:
+/// the len is 518400 but the index is 518572`, at `cart.rs:405`. On the device that runs before
+/// the first frame, on every boot, on any card with a game on it — so the launcher restarted
+/// the frontend every three seconds and the handheld never left its boot splash. This is the
+/// assertion that would have caught it, and `CartSize::label_box` is the name that makes the
+/// two meanings hard to confuse again.
+#[test]
+fn every_label_panel_fits_inside_its_own_face() {
+    for system in [System::Gba, System::Gb, System::Gbc] {
+        let size = size_for(system);
+        let (x, y, w, h) = size.label_box();
+        assert!(w > 0 && h > 0, "{system:?}: the label panel is empty");
+        assert!(
+            x + w <= size.face_w(),
+            "{system:?}: the label runs {} px past the right edge",
+            x + w - size.face_w()
+        );
+        assert!(
+            y + h <= size.face_h(),
+            "{system:?}: the label runs {} px past the bottom edge",
+            y + h - size.face_h()
+        );
+    }
+}
+
+/// And the face a real cart produces is its machine's face, whole. Nothing but a rom on a card
+/// is needed to fail this one, which is what the panic above needed too.
+#[test]
+fn a_cart_face_comes_out_the_size_of_its_machines_face() {
+    let d = tmp_root();
+    write_rom(&d, "Emerald.gba", "POKEMON EMER");
+    write_rom(&d, "Link.gbc", "LINKAWAKEN");
+    write_rom(&d, "Tetris.gb", "TETRIS");
+    for cart in scan(d.path()).unwrap() {
+        let size = size_for(cart.system());
+        let face = cart_face(&cart);
+        assert_eq!(
+            (face.w, face.h),
+            (size.face_w(), size.face_h()),
+            "{:?} came out the wrong size",
+            cart.system()
+        );
+        assert_eq!(face.rgba.len(), (face.w * face.h * 4) as usize);
+    }
+}
+
+/// The stand-in is drawn for every cart whose own face has not been built yet — on a card of
+/// nine hundred games that is nearly all of them, every time the caret moves. It fills the
+/// label recess, so it reads the same panel the cart above does.
+#[test]
+fn the_placeholder_fits_its_face_too() {
+    for system in [System::Gba, System::Gb, System::Gbc] {
+        let size = size_for(system);
+        let f = cart_placeholder(size, system);
+        assert_eq!((f.w, f.h), (size.face_w(), size.face_h()), "{system:?}");
+        assert_eq!(f.rgba.len(), (f.w * f.h * 4) as usize, "{system:?}");
+    }
 }
