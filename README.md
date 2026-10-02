@@ -9,7 +9,8 @@
 > **本仓库是上游 slot 的修改版，非官方版本。** 原作 © Brandon T. Kowalski，MIT 许可；
 > 修改由 [@RetroGame66](https://github.com/RetroGame66) 完成。
 
-A bespoke, GBA-only frontend for the Anbernic RG SP.
+A bespoke frontend for the Anbernic RG SP, covering the console's own Game Boy, Game Boy Color and
+Game Boy Advance libraries.
 
 Upstream's own README is kept **unmodified** beside this one, at
 [`README.upstream.md`](README.upstream.md). It is the project's documentation in its author's own
@@ -22,9 +23,10 @@ the fork: what it adds, what it changes, and what the buttons actually do here.
 
 A modified build of `slot`, aimed at a Chinese GBA library living on one SD card.
 
-**99 files changed, +9,377 / −828** against upstream `4345cb8b` — 92 of them the change set proper
-(15 new files, 77 modified) and 7 the fork's notice and repository housekeeping. The full account,
-feature by feature and file by file with the reasoning, is in [`CHANGES.md`](CHANGES.md).
+**150 files changed, +19,888 / −1,350** against upstream `4345cb8b` — 49 added, 97 modified,
+4 deleted. Some of them are this fork's notice and repository housekeeping rather than changes to
+the frontend. The full account, feature by feature and file by file with the reasoning, is in
+[`CHANGES.md`](CHANGES.md).
 
 The short of it: the interface is Chinese and takes its typeface off the card; the shelf's index
 runs across the top of the case, because a library of hanzi has no alphabetical order of its own; a
@@ -134,9 +136,24 @@ bracketed facts a dump carries in its filename; `strip_tags off` keeps them, whi
 for a pack that marks editions with `[中]` / `[日]` / `[英]` suffixes. The ring files carts by their
 base title either way, so a title that keeps its tags still lands under the right letter.
 
-**GB / GBC cartridge art.** Cartridge shapes drawn for GB and GBC carts, at the same 4 px/mm and
-under the same white-fill contract as `cart.svg` (the code colours them). **Assets only — nothing
-references them yet.** They are here so the addition is not mistaken for a working feature.
+**Cart art the card supplies.** The shelf draws its cartridges in code, but a card may replace
+them: `System/Carts/` takes `cart_gb.png`, `cart_gbc.png`, `cart_gba.png` and the Advance board
+`board_gba.png`. Size is not a hard limit — each is scaled into its own slot — but the aspect ratio
+has to match or the drawing stretches; the on-screen 1:1 sizes are GB/GBC `240x276`, GBA `360x202`
+and the board `744x418`. Art that is missing, unreadable, or in an **indexed palette** (which the
+decoder refuses outright) falls back to the built-in silhouette — **silently**, so a card without
+it looks stock rather than broken. The set ships with the release.
+
+The light theme repaints a built-in Advance shell in the housing's own colour, so a cart belongs to
+the same device as the furniture around it, and leaves a card's own art as drawn; the dark theme
+keeps a card's art but replaces its colour with luminance, so a bright drawing cannot fight the
+dark case. A cart whose face is not built yet stands in as the built-in shell under the same rule —
+which is what a letter jump slides past.
+
+**The machine badge.** The bottom-left corner names the machine whose shelf is up, the mirror of
+the favourites star in the bottom-right. Six pictures drive it: `type_gb.png`, `type_gbc.png` and
+`type_gba.png` in `System/Carts/`, plus the `_light` spelling of each for the light theme, each
+scaled to fit a `75x25` box. No file means the built-in word — `GB`, `GBC` or `GBA`.
 
 **Build and release scripts.** `check_glibc.py` (the highest `GLIBC_*` symbol a binary needs, its
 interpreter and its linkage), `verify_slot.py` (a built device binary really is aarch64, and really
@@ -338,8 +355,9 @@ the three minutes exist rather than an indefinite standby.
 
 ```
 BIOS/         gba_bios.bin, optional. Absent means mGBA's own high level BIOS.
-Games/        .gba roms.
+Games/        .gba, .gb and .gbc roms, in subfolders to any depth.
 Labels/       <rom stem>.png, drawn on the cartridge face. Absent means a text only label.
+Overlay/      the screen's own look, per machine — see the display section.
 Saves/        .sav and .srm battery saves.
 States/       <core>/<rom stem>/, save state rings ten deep per cart.
 System/       the binary, both cores, and the settings listed below.
@@ -526,6 +544,13 @@ cargo build --release --target aarch64-unknown-linux-gnu \
 
 `--no-default-features --features device` is not optional: the default features pull in the host
 backends (`gilrs`, `libudev`, `alsa`), which do not cross-compile and are not what the device runs.
+
+One thing the bare command leaves out on purpose: cross-compiling needs an **aarch64 linker**, and
+`rust-toolchain.toml` pins a channel without a target, so on a Windows host `cargo build` goes
+looking for the host's MSVC `link.exe` and fails before it ever reaches the target. This fork links
+with **zig** (`zig cc`) through a small forwarder, because rustc cannot invoke a `cc`-style driver
+under the name `linker`. On Linux with `gcc-aarch64-linux-gnu` installed the plain command above is
+enough.
 
 Upstream's `taskfile.yml` does the same thing inside an arm64 container, and is worth using when
 you want a whole card tree rather than just a binary:

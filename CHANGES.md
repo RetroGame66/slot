@@ -2,14 +2,14 @@
 
 A diff against upstream **`4345cb8bdb`** (2026-09-11, *Merge branch 'feat/core-picker-board'*).
 
-**150 files changed, 19,888 insertions(+), 1,350 deletions(-)** across the branch — 49 added, 97
+**150 files changed, 19,965 insertions(+), 1,351 deletions(-)** across the branch — 49 added, 97
 modified, 4 deleted. Some of them are this fork's notice and repository housekeeping rather than
 changes to the frontend (§12), which is what lets the tree stand on its own as a public fork of an
 MIT project.
 
 The counts above were taken again after the 2026-10-02 work landed (this changelog's own 10-02
-section, the helper scripts retargeted at the merged workspace root, and the light-theme stand-in
-cart fix); every section is in them.
+section, the helper scripts retargeted at the merged workspace root, the light-theme stand-in cart
+fix, and the README brought back in line with all of it); every section is in them.
 
 Everything below is listed by feature rather than by file, because that is how it was built:
 one concern at a time, with the files it touched.
