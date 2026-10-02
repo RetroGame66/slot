@@ -70,11 +70,12 @@ digit, punctuation, or a character the table does not know. Empty facets are dra
 over rather than closed up, because a ring that hid its gaps would make "B next to C" mean one
 cart apart on one card and two hundred apart on the next.
 
-**The ring's own keys are `Up` / `Down`.** Left and right still walk the cart row, so the letter
-ring takes the other axis: a press moves the marker and the shelf follows it. The ring used to have
-a second form — a **sidebar** stood down the panel's right edge, chosen at boot from
-`System/letternav.txt` — and that toggle is gone, along with the file it read. One dial, one
-reading.
+**The ring's keys are `L` / `R`.** They are the whole of the index, and the only pair that could be:
+they sit at either end of the strip printed across the top of the case, and on this screen they are
+the GBA's own shoulders with no core running to want them. The D-pad stays the row's — left and right
+walk the carts, and up and down mean nothing up here. The ring used to have a second form, a
+**sidebar** stood down the panel's right edge, chosen at boot from `System/letternav.txt`; that
+toggle is gone, along with the file it read. One dial, one reading.
 
 **A shortcut card under the about screen.** `MENU` on the carousel opens the label, and hanging
 under it is every key the machine answers, in **six sections**: the device's own keys first, then the
@@ -240,7 +241,7 @@ A `+` means both together. `†` marks a chord this fork adds; everything else i
 | Input           | Action                              |
 |-----------------|-------------------------------------|
 | `Left` / `Right`| Browse the cart row                 |
-| `Up` / `Down`   | Move the letter ring's marker       |
+| `L` / `R` †     | Step the letter index, one slot at a time |
 | Tap `A`         | Resume the last save state          |
 | Hold `A`        | Start the game fresh                |
 | Tap `X` †       | Star this cart, or unstar it        |
