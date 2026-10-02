@@ -2,13 +2,13 @@
 
 A diff against upstream **`4345cb8bdb`** (2026-09-11, *Merge branch 'feat/core-picker-board'*).
 
-**150 files changed, 19,767 insertions(+), 1,350 deletions(-)** across the branch — 49 added, 97
+**150 files changed, 19,863 insertions(+), 1,350 deletions(-)** across the branch — 49 added, 97
 modified, 4 deleted. Some of them are this fork's notice and repository housekeeping rather than
 changes to the frontend (§12), which is what lets the tree stand on its own as a public fork of an
 MIT project.
 
-The counts above were taken again after the 2026-10-01 work landed (the boot fix, the cartridge
-art, and the two about-screen drawings); every section is in them.
+The counts above were taken again after the 2026-10-02 work landed (this changelog's own 10-02
+section, and the helper scripts retargeted at the merged workspace root); every section is in them.
 
 Everything below is listed by feature rather than by file, because that is how it was built:
 one concern at a time, with the files it touched.
@@ -606,3 +606,33 @@ the save.
   出去过两份**内容不同却同名**的包 ⇒ 下载页开始骗人；重打的一律带 `-fix`，指南文件名不动。
 - **镭射膜 / 壳体边的实验全部回退**（同日）：试过壳体镭射边、把放大轮廓画在卡带下面（套筒外框）
   等方案，真机观感不成立，**净改动为零**，代码里没有留下痕迹。
+
+## 2026-10-02 更新（中文摘要）
+
+### 机种 LOGO 终于随包（玩家反馈）
+
+玩家反馈"左下角机种标不显示"。查证：左下角那个机种标（`app.rs::draw_shelf_logo`，右下角收藏星
+的镜像）按运行时文件名从卡上 `System/Carts/` 读 —— **暗色主题** `type_gb.png` / `type_gbc.png` /
+`type_gba.png`，**亮色主题** `type_gb_light.png` / `type_gbc_light.png` / `type_gba_light.png`
+（`frontend.rs` 的两批 `shelf_ind_faces` / `shelf_ind_light`，按 `palette::mode()` 二选一）。
+读不到就**静默回落**到内建小字（`plate.rs::word_face`，尺寸是电池百分比那一档），**不报错**。
+
+`deploy/System/Carts/` 当时只有 `cart_*.png` / `board_gba.png` ⇒ **六张一张没发**，玩家看到的
+其实是内建文字兜底。素材本身 09-28 就做好了（`_archive/TYPE-*.png`，`_archive/货架-LOGO*.png`
+是同期版面稿）。
+
+现按运行时文件名 cp 进 `deploy/System/Carts/`（中英两包共用，素材与语言无关）。六张均 8-bit RGBA、
+非隔行、3:1 宽高比（GB 那张源图 240×80，分辨率更高），被 `draw_shelf_logo` 按 75×25 的框等比
+contain。**二进制不变** —— `bin/slot-zh` 仍是 `a356f93d…`，读 `type_*.png` 的字面量从 09-29 起
+就在里面 ⇒ 本次只是补素材，没有重编。
+
+发布：`slot-release-2026-10-02/slot-frontend-System-2026-10-02.zip`（及 `-en`），各 44 项 / 11.9 MB。
+
+⚠️ **这条为什么躲过了上一次的逐目录检查**：`frontend.rs` 读它用的是 `d.join(file)`，文件名来自
+一个 `[("GB", "type_gb.png"), …]` 数组变量 ⇒ 按**字面量**扫 `join("…")` 的检查**扫不到**。
+补完素材后，可靠做法是**字节级**核对二进制与包内容（`b.count(b"type_gba.png")`，
+注意 Git Bash 里没有 `strings`，用它当判据会得到全 0 的假结果）。
+
+**对 §「卡带 / 板图素材终于随包」那条长期规则的补充**：`deploy/System/Carts/` 不止 `cart_*` ——
+还有机种 LOGO 六张。凡新增"从卡上读、缺失即回落"的资源，都要同时进 `deploy/` 并**连变量拼接的
+文件名一起核**。
