@@ -70,19 +70,19 @@ digit, punctuation, or a character the table does not know. Empty facets are dra
 over rather than closed up, because a ring that hid its gaps would make "B next to C" mean one
 cart apart on one card and two hundred apart on the next.
 
-**The same ring, stood on its end.** The ring reads two ways — a **wheel** laid across the panel,
-or a **sidebar** stood down its right-hand edge — and `SELECT` + `START` swaps which one is up. It
-is one dial either way, drawn twice, so the two views cannot disagree about where the library is:
-the facets still bunch towards the ends and one letter still plainly owns the middle. `L` / `R` step
-it as well as `Up` / `Down`, which is the pair a dial lying across the panel asks for and the pair
-users asked for by name. Which one reads better is a matter of hands, so the choice lives on the
-card in `System/letternav.txt` (`wheel` or `sidebar`) rather than in the build.
+**The ring's own keys are `Up` / `Down`.** Left and right still walk the cart row, so the letter
+ring takes the other axis: a press moves the marker and the shelf follows it. The ring used to have
+a second form — a **sidebar** stood down the panel's right edge, chosen at boot from
+`System/letternav.txt` — and that toggle is gone, along with the file it read. One dial, one
+reading.
 
 **A shortcut card under the about screen.** `MENU` on the carousel opens the label, and hanging
-under it is every key the machine answers: one section for the carousel, one for in game, the five
-`SELECT` chords included. `Up` / `Down` page it, `B` or `MENU` closes, and a line pinned at the foot
-says so. The rows are fixed strings rasterised at boot with the rest of the furniture — opening
-the one screen whose job is to be read is the worst moment to be asking a font for twenty lines.
+under it is every key the machine answers, in **six sections**: the device's own keys first, then the
+carousel, then in game — and the in-game rows are split by machine (all three together, then the
+Advance, the Game Boy, the Game Boy Color), because `SELECT` + `X` and `SELECT` + `Y` do something
+different on each. `Up` / `Down` page it, `B` or `MENU` closes, and a line pinned at the foot says
+so. The rows are fixed strings rasterised at boot with the rest of the furniture — opening the one
+screen whose job is to be read is the worst moment to be asking a font for thirty-nine lines.
 
 **Panel-mask presets.** Upstream multiplies the picture by one fixed LCD3x table, always. Here the
 Advance's aperture is **seven presets** on `SELECT` + `X` — OFF, the LCD3x grid at 25 / 50 / 75 /
@@ -171,9 +171,13 @@ here because the fiddly parts of maintaining a card should be a button. Describe
 [The companion toolbox](#the-companion-toolbox).
 
 **Settings that travel with the card** rather than with the binary. `System/` now carries `fonts/`,
-`labels.txt`, `display.txt`, `mask.txt`, `cc.txt`, `audio.txt`, `remap.txt`, `letternav.txt` and `Cheats/`. Every one
+`labels.txt`, `display.txt`, `mask.txt`, `cc.txt`, `audio.txt`, `Cheats/` and `remap.txt`. Every one
 of them is optional: a missing, blank or misspelled file is the shipped default, not an error,
-because a device with no console is not the place to surface a typo in a config file.
+because a device with no console is not the place to surface a typo in a config file. Beside those
+sit the files the frontend writes for itself so a choice survives a reboot — `slot.state` (light or
+dark, among other things), `display.txt`'s four integers, `overlay.txt` (which overlay each Game Boy
+last showed) and `shelf.txt` (which machine's shelf was up). `letternav.txt` is **no longer read**:
+the letter-view toggle it configured is gone, and a card that still carries the file simply keeps it.
 
 ## What this fork changes
 
@@ -194,7 +198,7 @@ selection rather than stopping at it. Faces are rasterised at twice the logical 
 down into it, so the hero is only ever downsampled, never stretched. A cart eases into the slot
 anchored by its foot, so it does not drop by half its own height the moment the insert starts.
 
-**The control tables are rebuilt.** The four `SELECT` chords above are written down for the first
+**The control tables are rebuilt.** The five `SELECT` chords above are written down for the first
 time, the `System/` inventory is complete (upstream's listed `theme.txt` and `selected_core.ini`
 only), and the save-state switcher's own keys are documented. The carousel's row is browsed with
 `Left` / `Right` — the D-pad — and not with the shoulder buttons, which do nothing there on their
@@ -202,9 +206,12 @@ own.
 
 ## What this fork leaves alone
 
-Boot, the launcher and the core picker, emulator plumbing, the two libretro cores, the save files
-and save-state rings, rewind, fast-forward, the lid behaviour, mute, the blue-light control, the
-link features, the about screen and the power menu are upstream's and are left as they stand.
+Boot, the launcher, emulator plumbing, the two libretro cores, the save files and save-state rings,
+rewind, fast-forward, the lid behaviour, mute, the blue-light control, the link features and the
+power menu are upstream's and are left as they stand. The about screen and the core picker are upstream's screens
+with this fork's drawings in them: the sticker and the wordmark are the author's own files
+(`sticker-66mod.png`, `wordmark-66mod.png`) where upstream had SVG, and the picker no longer draws
+its sockets over a cart's own board.
 
 **Comments in this tree are English**, in the prose style the tree already uses. Chinese appears
 only where it is *data* the program parses and compares against: the interface's own translated
@@ -233,7 +240,7 @@ A `+` means both together. `†` marks a chord this fork adds; everything else i
 | Input           | Action                              |
 |-----------------|-------------------------------------|
 | `Left` / `Right`| Browse the cart row                 |
-| `L` / `R` †     | Step the letter index, one slot at a time |
+| `Up` / `Down`   | Move the letter ring's marker       |
 | Tap `A`         | Resume the last save state          |
 | Hold `A`        | Start the game fresh                |
 | Tap `X` †       | Star this cart, or unstar it        |
@@ -328,10 +335,12 @@ it moved.
 **`SELECT` + `START` — light or dark.** On the carousel. The whole frontend prints one of two ways:
 a dark case with light type, or a light case with dark type. The choice is written to
 `System/slot.state` as `mode=dark` or `mode=light` and survives a reboot; a state file written before
-this existed has no such line and reads dark, which is what that card was already showing. A
-cartridge does not change with it — a shell is a colour its owner chose and a label is artwork, and
-neither is chrome. Switching re-rasterises the type, because most of what is on this screen is baked
-into textures with the ink burned in.
+this existed has no such line and reads dark, which is what that card was already showing. The shelf
+follows the theme too: a built-in shell takes the housing's off-white on the light theme, a card's
+own art keeps its drawing but has its colour dropped to luminance on the dark one, and the stand-in
+cart and the machine badge are re-baked on a switch so neither is left in the other theme's colour.
+Switching re-rasterises the type, because most of what is on this screen is baked into textures with
+the ink burned in.
 
 ### How the `SELECT` chords behave
 
@@ -396,9 +405,10 @@ and `cc_gb` indexes the 343-palette table. A file with fewer numbers still reads
 and one-integer spellings meant "this colour, every machine", and that is still what they mean. An
 unparsable file, or no file, means the shipped look.
 
-Label art is drawn at 196x86, or about 2.28:1. Anything else is scaled to cover that box and centre
-cropped, so a square or portrait image loses its top and bottom. Bigger art is fine and comes down
-to size; smaller gets stretched up and shows it.
+Label art is drawn at **394x171** — the panel at the face's own resolution, `FACE_SCALE` (2) times
+the logical cart — or about **2.30:1**. Anything else is scaled to cover that box and centre cropped,
+so a square or portrait image loses its top and bottom. Bigger art is fine and comes down to size;
+smaller gets stretched up and shows it.
 
 `System/theme.txt` is entirely optional and controls the appearance of the slot:
 
@@ -593,8 +603,10 @@ same directory; a card built by hand and handed to someone has to assemble it to
 
 The rest of what ships:
 
-- The card's typeface in `System/fonts/` is Noto Sans CJK SC Bold, under the SIL Open Font License,
-  which the release zip carries beside it.
+- The card's typeface in `System/fonts/` is **Plix Bold** (普力士), under the SIL Open Font License —
+  `Plix-Bold.otf`, 7.5 MB, with its licence text beside it and both carried by the release zip. It
+  replaced Noto Sans CJK SC Bold on 2026-09-24. A card that carries no face at all falls back to the
+  embedded one below.
 - The device boots [AGS-102](https://github.com/BrandonKowalski/AGS-102), a purpose-made fork of
   [BaseOS](https://github.com/pvaibhav/BaseOS) by @pvaibhav.
 - Type is [Open Sans](https://github.com/googlefonts/opensans), under the SIL Open Font License, and
