@@ -2,13 +2,14 @@
 
 A diff against upstream **`4345cb8bdb`** (2026-09-11, *Merge branch 'feat/core-picker-board'*).
 
-**150 files changed, 19,863 insertions(+), 1,350 deletions(-)** across the branch — 49 added, 97
+**150 files changed, 19,888 insertions(+), 1,350 deletions(-)** across the branch — 49 added, 97
 modified, 4 deleted. Some of them are this fork's notice and repository housekeeping rather than
 changes to the frontend (§12), which is what lets the tree stand on its own as a public fork of an
 MIT project.
 
 The counts above were taken again after the 2026-10-02 work landed (this changelog's own 10-02
-section, and the helper scripts retargeted at the merged workspace root); every section is in them.
+section, the helper scripts retargeted at the merged workspace root, and the light-theme stand-in
+cart fix); every section is in them.
 
 Everything below is listed by feature rather than by file, because that is how it was built:
 one concern at a time, with the files it touched.
@@ -636,3 +637,28 @@ contain。**二进制不变** —— `bin/slot-zh` 仍是 `a356f93d…`，读 `t
 **对 §「卡带 / 板图素材终于随包」那条长期规则的补充**：`deploy/System/Carts/` 不止 `cart_*` ——
 还有机种 LOGO 六张。凡新增"从卡上读、缺失即回落"的资源，都要同时进 `deploy/` 并**连变量拼接的
 文件名一起核**。
+
+### 亮色模式下的占位卡带不再是暗色（同日，玩家反馈）
+
+亮色模式下按字母跳转，滑过去的卡带仍是暗色模式的深色。跳转跨几百张卡、其中大多没有自己的
+卡面，所以动的是**占位卡带**（`shelf.rs` 的 placeholder 分支），问题在这里最显眼。两个原因叠加：
+
+1. **内建卡壳没有亮色处理。** 亮色重涂只写在 `cart.rs::card_face` 里，那是"卡上自带素材"的
+   路径；占位卡走 `cart_placeholder` → `shell_for("")` → `DEFAULT_SHELL`，颜色恒为
+   `[0x35,0x35,0x3a]` 深灰。⇒ 亮色下凡是**走内建路径**的卡（占位卡，以及卡上没有 cart art 的卡）
+   都是深色。
+2. **主题切换不重烘行框。** 占位卡和它下面的阴影由 `frontend.rs::set_shelf_geometry` 烘焙，而它
+   只在 `shelf_dirty`（换机种）时跑；`rebake`（切主题）只重烘固定家具和可见窗口的卡面。
+   ⇒ 就算修好第 1 条，切完主题贴图也还是旧的。
+
+| File | Change |
+|---|---|
+| `slot-ui/src/cart.rs` | **New** `themed_shell()` —— 亮色主题把内建卡壳换成 `slot_chrome::housing()`（顶/底条那层米白），暗色主题保留表里的游戏壳色。`cart_placeholder` 与 `cart_face` 的内建分支都过它，规则与 `card_face` 对 Advance 素材卡的做法一致：*卡带属于这台设备*。 |
+| `slot/src/frontend.rs` | **New** `rebake_row_frame()` —— 把"阴影 + 占位卡"的烘焙从 `set_shelf_geometry` 抽出来，`rebake`（主题）与 `set_shelf_geometry`（换机种）共用。 |
+
+二进制随之更新：`bin/slot-zh` `a356f93d…` → **`fa0227e9…`**，`bin/slot-en` `648911d7…` → **`dda06bd0…`**。
+
+⚠️ **教训**：`themed_shell()` 在**烘焙时**读 `palette::mode()`，是一个"会过期的颜色"。凡烘一次、
+长期复用的贴图，都要问一句"它对主题敏感吗？切主题时谁负责重烘"。这次的坑正是**两条路径各修了
+一半**：`card_face` 有亮色逻辑但不需要重烘（卡面本来就随主题整批重建），占位卡需要重烘却没有
+亮色逻辑。
