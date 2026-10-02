@@ -2,8 +2,8 @@
 """Pack deploy/ into a zip whose top level is System/, ready to unzip onto the SD card."""
 import os, zipfile
 
-SRC = r"F:/WorkBuddyWorkSpace/2026-09-11-08-38-21/slot-main/deploy"
-OUT = r"F:/WorkBuddyWorkSpace/2026-09-11-08-38-21/slot-frontend-System.zip"
+SRC = r"F:/WorkBuddyWorkSpace/RGSP_SLOT_66MOD/slot-main/deploy"
+OUT = r"F:/WorkBuddyWorkSpace/RGSP_SLOT_66MOD/slot-frontend-System.zip"
 
 entries = []
 for dirpath, _dirnames, filenames in os.walk(SRC):

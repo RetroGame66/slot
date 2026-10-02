@@ -1,6 +1,6 @@
 import os, re, base64
 
-base = r"F:\WorkBuddyWorkSpace\2026-09-11-08-38-21\操作指南-图文版"
+base = r"F:\WorkBuddyWorkSpace\RGSP_SLOT_66MOD\操作指南-图文版"
 src = os.path.join(base, "操作指南-图文版.html")
 dst = os.path.join(base, "操作指南-图文版-单文件.html")
 img_dir = os.path.join(base, "img")

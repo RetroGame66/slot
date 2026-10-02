@@ -2,7 +2,7 @@
 """Verify the freshly built device binary: aarch64 ELF + Chinese UI strings + glibc ceiling."""
 import struct, sys
 
-P = r"F:/WorkBuddyWorkSpace/2026-09-11-08-38-21/slot-main/target-device/aarch64-unknown-linux-gnu/release/slot"
+P = r"F:/WorkBuddyWorkSpace/RGSP_SLOT_66MOD/slot-main/target-device/aarch64-unknown-linux-gnu/release/slot"
 data = open(P, "rb").read()
 print("file size :", len(data), "bytes")
 

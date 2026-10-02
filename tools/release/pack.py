@@ -2,7 +2,7 @@
 """Assemble slot-release-YYYY-MM-DD/: the front-end System zip(s) + SHA256SUMS."""
 import os, shutil, zipfile, hashlib, sys
 
-W = r"F:/WorkBuddyWorkSpace/2026-09-11-08-38-21"
+W = r"F:/WorkBuddyWorkSpace/RGSP_SLOT_66MOD"
 SRC = os.path.join(W, "slot-main", "deploy")
 REL = os.path.join(W, "slot-release-2026-09-24")
 DATE = "2026-09-24"

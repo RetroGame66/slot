@@ -2,11 +2,11 @@ import os, glob, re
 from fontTools.ttLib import TTFont
 from fontTools import subset
 
-S = r'F:\WorkBuddyWorkSpace\2026-09-15-21-43-08\_scratch'
-FULL = r'F:\WorkBuddyWorkSpace\2026-09-11-08-38-21\slot-main\deploy\System\fonts\NotoSansCJKsc-Bold.otf'
+S = r'F:\WorkBuddyWorkSpace\RGSP_SLOT_66MOD\_scratch'
+FULL = r'F:\WorkBuddyWorkSpace\RGSP_SLOT_66MOD\slot-main\deploy\System\fonts\NotoSansCJKsc-Bold.otf'
 DEV = os.path.join(S, 'devfont.otf')
 OUT = os.path.join(S, 'NotoSansCJKsc-Bold.sub.otf')
-SRC = r'F:\WorkBuddyWorkSpace\2026-09-11-08-38-21\slot-main\crates'
+SRC = r'F:\WorkBuddyWorkSpace\RGSP_SLOT_66MOD\slot-main\crates'
 
 BASE_RANGES = [
     (0x0020, 0x007E), (0x00A0, 0x00FF), (0x2010, 0x2027), (0x2030, 0x205E),
