@@ -2,12 +2,13 @@
 
 A diff against upstream **`4345cb8bdb`** (2026-09-11, *Merge branch 'feat/core-picker-board'*).
 
-**104 files changed, 11,256 insertions(+), 904 deletions(-)** across the branch — 20 added, 82
-modified, 2 deleted. Some of them are this fork's notice and repository housekeeping rather than
+**150 files changed, 19,767 insertions(+), 1,350 deletions(-)** across the branch — 49 added, 97
+modified, 4 deleted. Some of them are this fork's notice and repository housekeeping rather than
 changes to the frontend (§12), which is what lets the tree stand on its own as a public fork of an
 MIT project.
 
-The counts above were taken again after §19 landed; every section is in them.
+The counts above were taken again after the 2026-10-01 work landed (the boot fix, the cartridge
+art, and the two about-screen drawings); every section is in them.
 
 Everything below is listed by feature rather than by file, because that is how it was built:
 one concern at a time, with the files it touched.
@@ -540,3 +541,68 @@ the save.
 - **`display.txt` 现在四个整数**：`mask cc_gba cc_gb cc_gbc`；老的两数 / 一数文件照旧可读。
 - **文档**：卡上 `deploy/README.md`（中文）与 `deploy-en/README.md`（英文）重写显示模式一节并新增
   与卡片逐行一致的按键总览；仓库 `README.md` 的 Controls 与显示相关段落同步。
+
+---
+
+## 2026-10-01 更新（中文摘要）
+
+前两节是功能迭代，这一节**先是事故，再是补发**。
+
+### ⚠️ 热修：卡上有游戏就进不了系统（`c9f07f51` → `a356f93d`）
+
+玩家的三份日志指出一个严重回归：**卡上只要有一个 ROM（`.gba` / `.gb` / `.gbc`），前端就 panic
+在开机画面**，底座的会话脚本每 ~3 秒重拉一次、拉 9 次后放弃，屏幕就永远停在开机图。
+空卡永远测不出来（没有卡带要画，这条路根本不跑）⇒ **09-24 之后的所有构建都带着它**，
+玩家"删掉 ROM 就能进"正是这么来的。
+
+- **根因**：`CartSize::label_panel()` 返回的是**四个角坐标** `(x0,y0,x1,y1)`，而多机种重构后的新
+  调用点 `cart_face()` 把它当成 `(x,y,w,h)` 用 ⇒ 在 480×270 的卡面上贴了一张按起点多算了 43/62
+  的"标签"（437×233）⇒ 最后 24 行写到卡面之外，索引越界。
+  日志里的两个数**可以自验**：`480×270×4 = 518400`（= `the len is`）、
+  `(270×480+43)×4 = 518572`（= `the index is`）。
+- **回归引入点** = `2fdd867`（09-29 的 working-tree sync）：多机种重构把全局 `LABEL_X/Y/W/H` 换成
+  `CartSize::label_panel()`，新调用点把"角"当成了"尺寸"。
+- **修法**（`3dfc1b2`）：新增 `CartSize::label_box()`（**原点 + 尺寸**）供 `cart_face` /
+  `cart_placeholder` 使用，`label_panel_at` 的文档写明「**角，不是尺寸**」；`paste_label()` 补上
+  边界裁剪（原先只有同文件的 `recess_label → put()` 有那层保护）；
+  `slot-ui/tests/cart.rs` 补 3 个回归测试（面板装得下 / 真卡带出图尺寸 / 占位卡同样）。
+- **设备现场**（反复硬重启把 SD 卡 vfat 弄脏、分区被内核挂成只读）的修序，**别跳 `-n`**：
+  `umount /mnt/sdcard` → `fsck.fat -n` → `fsck.fat -a` → `mount -o remount,rw`。
+  `-n` 先报出"只断了一个 `boot.log` 的簇链、没有文件名损坏"，才敢用 `-a` 修 ——
+  `fsck.fat -a` 在长文件名损坏时会把名字改成 `XXXX~1`，而游戏名同时是存档的 key。
+- 真机复核：`slot` 常驻、`boot.log` 完整到 `first frame at 7.24 s of uptime`、`slot.log` 无 panic、
+  抓帧 4 万色（货架正常）。
+
+### 卡带 / 板图素材终于随包
+
+`System/Carts/`（`cart_gb.png` / `cart_gbc.png` / `cart_gba.png` / `board_gba.png`）是**卡片侧素材**
+（`cart_art.rs::DIR`），**读不到就静默回落**到二进制里的内建矢量卡带 —— 而 `slot-main/deploy/`
+一直没有这个目录 ⇒ **此前每个分发包都没带**，玩家看到的一直是内建旧外观。
+
+现按运行时文件名 `cp` 进 `deploy/System/Carts/`（中英两包共用，素材与语言无关；两个包各 38 项 /
+11.9 MB，开机 +约 90 ms）。
+
+**长期规则**：`deploy/` 必须覆盖**所有卡片侧素材目录**（`System/Carts/`、`Overlay/`、
+`System/fonts/`）—— 缺了**不报错**，只表现为"玩家少东西"。
+
+### 卡带自定义写进随包指南
+
+`deploy/README.md` 与 `deploy-en/README.md` 各新增一节「开放卡带自定义（做自己的卡带）」/
+「Custom cartridges」，把从 `cart_art.rs` 抠出来的规则写清：
+
+- 尺寸**不是硬限制**（`Art::face()` 各自独立缩放），但**宽高比必须一致**，否则拉伸；
+  推荐尺寸 = 屏上 1:1：GB/GBC **240×276**、GBA **360×202**、板图 **744×418**。
+- **索引色 PNG 会被直接拒收**（`Art::decode` 对 `ColorType::Indexed` 返回 `None`），**且不报错**。
+- 贴纸位 = **所有品红像素的外接矩形**；遮罩 = **品红像素本身的形状**；
+  品红判据是数值 `p[3] > 0 && p[0] > 200 && p[1] < 60 && p[2] > 200`。
+- 着色：暗色主题下**颜色被替换、只留明暗**（底图画中性灰白塑料）；亮色主题 GB/GBC **保留原图颜色**、
+  GBA 重涂成机壳浅灰。
+
+### 其他
+
+- **关于页的标牌与字标换成作者本人的画**（`d49938f`）：`sticker-66mod.png` / `wordmark-66mod.png`
+  取代原先的 SVG；**核心选择器不再把插座画在卡自己的板图上**（`8da3bcb`）。
+- **发布包后缀开关**：`make_release_assets.py` 新增 `SLOT_RELEASE_SUFFIX`（默认空）。起因是同一天
+  出去过两份**内容不同却同名**的包 ⇒ 下载页开始骗人；重打的一律带 `-fix`，指南文件名不动。
+- **镭射膜 / 壳体边的实验全部回退**（同日）：试过壳体镭射边、把放大轮廓画在卡带下面（套筒外框）
+  等方案，真机观感不成立，**净改动为零**，代码里没有留下痕迹。
