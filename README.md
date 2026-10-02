@@ -604,7 +604,8 @@ same directory; a card built by hand and handed to someone has to assemble it to
 
 The rest of what ships:
 
-- The card's typeface in `System/fonts/` is **Plix Bold** (普力士), under the SIL Open Font License —
+- The card's typeface in `System/fonts/` is **Plix Bold** (普力士) by 虎卅泓 (cathree3),
+  <https://github.com/cathree3/Plix>, under the SIL Open Font License and built on IBM Plex Sans —
   `Plix-Bold.otf`, 7.5 MB, with its licence text beside it and both carried by the release zip. It
   replaced Noto Sans CJK SC Bold on 2026-09-24. A card that carries no face at all falls back to the
   embedded one below.
