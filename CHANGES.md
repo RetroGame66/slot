@@ -2,14 +2,15 @@
 
 A diff against upstream **`4345cb8bdb`** (2026-09-11, *Merge branch 'feat/core-picker-board'*).
 
-**150 files changed, 19,965 insertions(+), 1,351 deletions(-)** across the branch — 49 added, 97
+**150 files changed, 20,146 insertions(+), 1,351 deletions(-)** across the branch — 49 added, 97
 modified, 4 deleted. Some of them are this fork's notice and repository housekeeping rather than
 changes to the frontend (§12), which is what lets the tree stand on its own as a public fork of an
 MIT project.
 
 The counts above were taken again after the 2026-10-02 work landed (this changelog's own 10-02
 section, the helper scripts retargeted at the merged workspace root, the light-theme stand-in cart
-fix, and the README brought back in line with all of it); every section is in them.
+fix, the README brought back in line with all of it, and English write-ups for the 09-30, 10-01 and
+10-02 sections, which had been Chinese only); every section is in them.
 
 Everything below is listed by feature rather than by file, because that is how it was built:
 one concern at a time, with the files it touched.
@@ -518,6 +519,61 @@ the save.
 
 ---
 
+## 2026-09-30 update
+
+A day of iteration on the display controls, the shortcut card, and one name for overlay art.
+
+### Palette browser: eighteen grades on a colour machine, each cell named, the picture's own colours
+
+The colour machines (Advance and Color) went from four grades to **eighteen, in two pages of nine** —
+the real-hardware family (none, AGB-001, libretro GBA, VBA, GBC transpose, NDS, DB16, DB32,
+Commodore 64) and then the stylistic ones (greyscale, four duotones, TealOrange, HorrorBlue, Classic
+Chrome, BleachBypass). Four mechanisms sit behind them — a 3x3 matrix in linear space, a Rec.601 luma
+ramp, a CIELAB nearest-colour map and a baked 32-cube — and **not one line of the shader changed**:
+each grade routes onto a channel that was already there.
+
+**Hold `SELECT` + `Y`** opens the browser: three columns, a 3x3 grid for a colour machine and 3x5 for
+a Game Boy. A colour machine prints the grade's name under its cell (nine names fit); the Game Boy
+keeps one large line at the bottom, because 263 of its 343 names are wider than a cell. The swatches
+became **the picture's own colours** — eight hues across the top, black-to-white along the second row
+— where the old ones ran the grey axis, so all eighteen cells looked alike and grey.
+
+### The shortcut card (`MENU`) rearranged into six sections
+
+Anywhere (first) / on the carousel / in game for all three machines / in game on an Advance / on a
+Game Boy / on a Game Boy Color. The card also gained the **POWER** key it had been missing
+everywhere: tap to sleep and wake, hold for the power menu.
+
+### `SELECT` + `R2` unbound
+
+It had been the second key to the overlay ring, exactly duplicating `SELECT` + `X` on a Game Boy and
+doing nothing at all on the other two machines, so the chord was dropped from `chord()` — and the
+`OverlayNext` action with it — leaving `R2` free again. A bare `R2` is still fast-forward, and `B`
+and `L2` are free for the same reason.
+
+### One name for overlay art
+
+The card's `Overlay/` and the GB/GBC overlay rings are no longer called 「屏幕外观」 in one place and
+「屏幕遮罩」 in another — neither on the card nor in either shipped guide.
+
+### Fixed: `display.txt`'s grade was clamped to the old range
+
+It read back through a `.min(4)` left over from the five-grade era, so choosing the scanline (5 or 6)
+fell back to LCD3x 100% on the next boot. The constant moved into `root.rs` (`MASK_STATES`) and is
+referenced from `app.rs`, and a new `tests/display.rs` walks every grade as a regression.
+
+### `display.txt` now holds four integers
+
+`mask cc_gba cc_gb cc_gbc`. The older two- and one-integer spellings still read.
+
+### Docs
+
+The card's `deploy/README.md` (Chinese) and `deploy-en/README.md` (English) had their display-mode
+section rewritten and gained a shortcut overview that lines up with the card row for row; the
+repository `README.md`'s Controls and display sections were brought in line with it.
+
+---
+
 ## 2026-09-30 更新（中文摘要）
 
 本小节为 09-30 全天迭代的中文说明。对应的英文细节（注释与代码）随本日提交一并进入。
@@ -542,6 +598,77 @@ the save.
 - **`display.txt` 现在四个整数**：`mask cc_gba cc_gb cc_gbc`；老的两数 / 一数文件照旧可读。
 - **文档**：卡上 `deploy/README.md`（中文）与 `deploy-en/README.md`（英文）重写显示模式一节并新增
   与卡片逐行一致的按键总览；仓库 `README.md` 的 Controls 与显示相关段落同步。
+
+---
+
+## 2026-10-01 update
+
+Two feature iterations — then an incident, and a release to make up for it.
+
+### Hotfix: a card with any game on it could not boot (`c9f07f51` → `a356f93d`)
+
+Three player logs pointed at a serious regression: **with even one ROM on the card — `.gba`, `.gb`
+or `.gbc` — the frontend panicked before the first frame replaced the boot picture**, the dock's
+session script pulled it up again every ~3 seconds and gave up after nine tries, and the screen
+stayed on the boot image for good. An empty card could never catch it — no cartridge to draw, so
+that code never runs — which is why **every build after 09-24 carried it**, and why players found
+that deleting the ROMs "fixed" it.
+
+- **Cause.** `CartSize::label_panel()` returns **four corner coordinates** `(x0,y0,x1,y1)`; the new
+  call site `cart_face()` read them as `(x,y,w,h)`. On a 480x270 face that pasted a 437x233 "label"
+  offset by the 43/62 origin, so the last 24 rows were written past the face — index out of bounds.
+  The two numbers in the log check out by hand: `480*270*4 = 518400` (the `len is`) and
+  `(270*480+43)*4 = 518572` (the `index is`).
+- **Where it came in.** `2fdd867`, the 09-29 working-tree sync: the multi-machine refactor replaced
+  the global `LABEL_X/Y/W/H` with `CartSize::label_panel()`, and the new call site read corners as
+  sizes.
+- **Fix** (`3dfc1b2`). A new `CartSize::label_box()` — origin **and** size — for `cart_face` and
+  `cart_placeholder`; `label_panel_at`'s docs now say *corners, not a size*; `paste_label()` gained
+  the bounds clipping its neighbour `recess_label → put()` already had; and `slot-ui/tests/cart.rs`
+  gained three regression tests (the panel fits, a real cart's output size, the stand-in likewise).
+- **On the device** — the repeated hard resets had dirtied the card's vfat and the kernel had
+  mounted it read-only — the repair order matters, and **do not skip `-n`**: `umount /mnt/sdcard` →
+  `fsck.fat -n` → `fsck.fat -a` → `mount -o remount,rw`. Only once `-n` had reported "one broken
+  cluster chain on `boot.log`, no damaged names" was `-a` safe to run: `fsck.fat -a` renames a
+  damaged long file name to `XXXX~1`, and a game name is a save's key.
+- **On hardware**: `slot` stays resident, `boot.log` runs to `first frame at 7.24 s of uptime`, no
+  panic in `slot.log`, and a captured frame holds 40k colours (the shelf is normal).
+
+### The cartridge and board art finally ships
+
+`System/Carts/` (`cart_gb.png`, `cart_gbc.png`, `cart_gba.png`, `board_gba.png`) is **card-side
+material** (`cart_art.rs::DIR`) that **falls back silently** to the built-in vector cartridge when it
+is missing — and `slot-main/deploy/` had never carried the directory, so **every release so far
+shipped without it** and players had been looking at the built-in art all along.
+
+Copied in under their runtime names (shared by both language packages — the art is not
+language-specific; 38 entries / 11.9 MB per package, about +90 ms at boot).
+
+**Standing rule**: `deploy/` has to cover **every card-side material directory** — `System/Carts/`,
+`Overlay/`, `System/fonts/`. A missing one **raises nothing**; it only shows up as "the player is
+missing something".
+
+### Cart customisation written into the shipped guides
+
+`deploy/README.md` and `deploy-en/README.md` each gained a section — 「开放卡带自定义（做自己的卡带）」
+and "Custom cartridges" — spelling out the rules lifted out of `cart_art.rs`:
+
+- Size is **not** a hard limit (`Art::face()` scales each on its own), but the **aspect ratio must
+  match** or the drawing stretches. Recommended = 1:1 on screen: GB/GBC `240x276`, GBA `360x202`,
+  the board `744x418`.
+- An **indexed-colour PNG is refused outright** (`Art::decode` returns `None` for
+  `ColorType::Indexed`) — **and says nothing about it**.
+- The label slot is the **bounding box of every magenta pixel**; the mask is the **shape of the
+  magenta pixels themselves**; magenta is `p[3] > 0 && p[0] > 200 && p[1] < 60 && p[2] > 200`.
+- Colouring: on the dark theme a card's own art has its **colour replaced and its luminance kept**
+  (drawn as neutral off-white plastic); on the light theme GB and GBC **keep the drawing's colours**,
+  and an Advance cart is repainted in the housing's light grey.
+
+### Also
+
+- **The about screen's sticker and wordmark became the author's own drawings** (`d49938f`):
+  `sticker-66mod.png` / `wordmark-66mod.png` replace the earlier SVG. And **the core picker no
+  longer draws its sockets over a cart's own board** (`8da3bcb`).
 
 ---
 
@@ -607,6 +734,60 @@ the save.
   出去过两份**内容不同却同名**的包 ⇒ 下载页开始骗人；重打的一律带 `-fix`，指南文件名不动。
 - **镭射膜 / 壳体边的实验全部回退**（同日）：试过壳体镭射边、把放大轮廓画在卡带下面（套筒外框）
   等方案，真机观感不成立，**净改动为零**，代码里没有留下痕迹。
+
+## 2026-10-02 update
+
+Two player reports, both on the display side. No new features.
+
+### The machine badge had never been shipped
+
+The badge in the bottom-left corner — the mirror of the favourites star in the bottom-right — is six
+pictures read off the card, one pair per theme: `System/Carts/type_gb.png`, `type_gbc.png` and
+`type_gba.png` for the dark theme, and the `_light` spelling of each for the light one. A file that
+is missing, unreadable or in an indexed palette is not an error: the frontend draws the built-in
+word — `GB`, `GBC` or `GBA` — instead, and says nothing.
+
+`deploy/System/Carts/` had never carried those six ⇒ **no release ever shipped them**, and what
+players saw was the fallback word. The art had been ready since 09-28.
+
+The sweep meant to catch this class of mistake — *list every directory the code reads off the card
+and check `deploy/` against it* — could not have caught this one. The name arrives as a **variable**
+(`d.join(file)`, out of a `[("GB", "type_gb.png"), …]` table), so a search for `join("…")` literals
+misses it. What does catch it is checking the bytes of the built binary and of the package
+(`b.count(b"type_gba.png")`) — and **not** with `strings`, which this checkout does not have, so
+grep-ing through it returns zero for strings that are plainly present.
+
+The binary did not change: the code that reads those six files has been in it since 09-29
+(`bin/slot-zh` is still `fa0227e9…`). Only the assets were missing.
+
+### The light theme's stand-in cart kept the dark one's colour
+
+On the light theme, a letter jump slid carts past in the dark theme's colour. A jump crosses hundreds
+of carts and most of them have no face of their own, so what actually moves is the **stand-in** —
+which is why it showed there. Two half-done things overlapped:
+
+- The light-theme repaint lived only in `cart.rs::card_face`, the path a card's *own* art takes. The
+  stand-in went through `cart_placeholder` → `shell_for("")` → `DEFAULT_SHELL`, a fixed dark grey no
+  theme touches.
+- The stand-in and its shadow are baked by `set_shelf_geometry`, which runs on a **machine swap**.
+  `rebake` — what a theme change calls — rebuilt the fixed furniture and the visible shelf window and
+  nothing else, so even with the first point fixed the texture stayed stale.
+
+Both are fixed. `cart::themed_shell()` gives a built-in shell the housing's off-white on the light
+theme — the same rule `card_face` already applied to a card's own Advance art, *a cart belongs to
+this device* — and `frontend::rebake_row_frame()` lifts the shadow-and-stand-in bake out of
+`set_shelf_geometry` so a theme change re-cuts it exactly as a machine swap does.
+
+Binaries updated: `bin/slot-zh` `a356f93d…` → **`fa0227e9…`**, `bin/slot-en` `648911d7…` →
+**`dda06bd0…`**.
+
+The lesson worth keeping: `themed_shell()` reads `palette::mode()` **at bake time**, so it is a colour
+that goes stale the instant the mode flips. Every texture baked once and reused for a long time has
+to answer two questions — does it depend on the theme, and who re-bakes it when the theme changes.
+This bug was two paths each half-answered: `card_face` had the light-theme rule but needed no
+re-bake (a face is rebuilt wholesale), and the stand-in needed a re-bake but had no light-theme rule.
+
+---
 
 ## 2026-10-02 更新（中文摘要）
 
