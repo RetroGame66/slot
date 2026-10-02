@@ -577,6 +577,11 @@ impl Frontend {
     fn rebake(&mut self, compositor: &mut Compositor) {
         let at = Instant::now();
         self.upload_fixed(compositor);
+        // The row's frame bakes a palette colour too — the blank cart is the housing's on the
+        // light theme — so a theme change re-cuts it exactly as a machine swap does. Without
+        // this the stand-in kept the other theme's colour until something else rebuilt it, and
+        // a letter jump is mostly stand-ins: that is where it showed.
+        self.rebake_row_frame(compositor);
         self.title_tex = None;
         self.shelf_title_tex = None;
         self.shelf_titled = None;
@@ -628,17 +633,7 @@ impl Frontend {
     fn set_shelf_geometry(&mut self, compositor: &mut Compositor) {
         let at = Instant::now();
         let sys = self.session.app().shelf_system();
-        let size = size_for(sys);
-        let shadow = cart_shadow(size, sys);
-        let id = compositor.create_texture(shadow.w, shadow.h, &shadow.rgba);
-        if let Some(old) = self.session.app_mut().set_cart_shadow(id) {
-            compositor.release_texture(old);
-        }
-        let blank = cart_placeholder(size, sys);
-        let blank = compositor.create_texture(blank.w, blank.h, &blank.rgba);
-        if let Some(old) = self.session.app_mut().set_cart_placeholder(blank) {
-            compositor.release_texture(old);
-        }
+        self.rebake_row_frame(compositor);
         // The faces need nothing here, and that is the point of measuring in the shelf rather
         // than in the library. `Shelf::shelf_distance` counts from the front of *every*
         // machine's shelf as well as from the live caret, so the row this swap is about to show
@@ -677,6 +672,27 @@ impl Frontend {
             sys.dir_name(),
             at.elapsed().as_millis()
         ));
+    }
+
+    /// The row's own frame — the shadow under a dimmed cart, and the blank cart a not-yet-built
+    /// face stands in as. Both bake a colour the palette owns: the light theme repaints the
+    /// built-in shell in the housing's colour (`cart::themed_shell`), so the blank cart is a
+    /// texture that goes stale the instant the mode flips. That is why this is one function —
+    /// `rebake` (theme) and `set_shelf_geometry` (machine) are two different reasons to want
+    /// the same two textures minted, and only the first knew about it before.
+    fn rebake_row_frame(&mut self, compositor: &mut Compositor) {
+        let sys = self.session.app().shelf_system();
+        let size = size_for(sys);
+        let shadow = cart_shadow(size, sys);
+        let id = compositor.create_texture(shadow.w, shadow.h, &shadow.rgba);
+        if let Some(old) = self.session.app_mut().set_cart_shadow(id) {
+            compositor.release_texture(old);
+        }
+        let blank = cart_placeholder(size, sys);
+        let blank = compositor.create_texture(blank.w, blank.h, &blank.rgba);
+        if let Some(old) = self.session.app_mut().set_cart_placeholder(blank) {
+            compositor.release_texture(old);
+        }
     }
 
     /// The third boot line: how long the card's faces took, which is the only part of the boot

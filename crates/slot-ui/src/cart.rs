@@ -217,8 +217,37 @@ pub fn cart_shadow(size: CartSize, system: slot_store::System) -> CartFace {
 /// crosses hundreds of carts and they cannot all be rasterised, but they can all be *a cart*:
 /// this one. Drawn where that cart is, it slides past as a cartridge rather than as the label's
 /// colour alone, which read as a bar of paint going by.
+/// The built-in shell as the current theme wants it. On the dark theme that is the table's own
+/// colour; on the light theme a built-in shell takes the housing's — the off-white the top and
+/// bottom bands are drawn in — so a cart reads as part of the same device as the furniture
+/// around it. `card_face` states the same rule for a card's own Advance art; this is the
+/// built-in path's half of it, and the reason the blank cart has to be re-minted when the
+/// theme changes and not only when the machine does.
+///
+/// Note this reads the mode at *bake* time, so it is a colour that goes stale the moment
+/// `palette::set_mode` runs: every caller of `cart_placeholder` / `cart_face` is expected to
+/// re-bake after a theme change.
+fn themed_shell(shell: &Shell) -> Shell {
+    match crate::palette::mode() {
+        crate::palette::Mode::Light => {
+            let h = crate::slot_chrome::housing();
+            Shell {
+                colour: [
+                    (h[0] * 255.0) as u8,
+                    (h[1] * 255.0) as u8,
+                    (h[2] * 255.0) as u8,
+                ],
+                finish: shell.finish,
+            }
+        }
+        crate::palette::Mode::Dark => *shell,
+    }
+}
+
 pub fn cart_placeholder(size: CartSize, system: slot_store::System) -> CartFace {
-    let shell = shell_for("");
+    // The stand-in wears the current theme's shell rather than the table's dark grey, which is
+    // what makes it belong to the light theme's furniture too.
+    let shell = themed_shell(&shell_for(""));
     let mut face = shell_face(&shell, size, system);
     mould_detail(&mut face, &shell, size, system);
     recess_label(&mut face, &shell, size.label_box());
@@ -235,6 +264,11 @@ pub fn cart_face(cart: &Cart) -> CartFace {
     if let Some(face) = card_face(cart, &shell, size) {
         return face;
     }
+    // Past the card's own art the built-in shell answers to the theme as well: on the light
+    // theme it takes the housing's colour, which is the same rule `card_face` has just applied
+    // to an Advance cart's own art — so a card with art and a card without still read as one
+    // device. On the dark theme the game's own shell colour stands.
+    let shell = themed_shell(&shell);
 
     let (lx, ly, lw, lh) = size.label_box();
 
